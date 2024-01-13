@@ -1,8 +1,8 @@
+"""Creates a single slurm to process each chunk of the dataset so these can be run in parallel on the compute clusters"""
 import os
 
 def get_slurm_script_string(CHUNK_MIN,CHUNK_MAX):
-    return f"""
-    #!/bin/bash
+    return f"""#!/bin/bash
     #SBATCH --nodes=1
     #SBATCH --time=10:00
     #SBATCH --mem=50G
@@ -36,7 +36,7 @@ slurm_files = []
 for i in range(165):
     script = get_slurm_script_string(i,i+1)
     
-    filename = DIR+f'process_lichess_chunk_{i:03}.slurm'
+    filename = DIR+'process_lichess_chunk_{i:03}.slurm'
     
     slurm_files.append(filename)
     
