@@ -5,7 +5,7 @@ def get_slurm_script_string(CHUNK_MIN,CHUNK_MAX):
     script = (
 f"""#!/bin/bash
 #SBATCH --nodes=1
-#SBATCH --time=10:00
+#SBATCH --time=15:00
 #SBATCH --mem=50G
 #SBATCH --job-name=uci{CHUNK_MIN}-{CHUNK_MAX}
 #SBATCH --error=slurm/opgn2uci-err-{CHUNK_MIN:03}-{CHUNK_MAX:03}-%J.err
@@ -35,7 +35,7 @@ if not os.path.exists(DIR):
     os.makedirs(DIR)
 
 slurm_files = []
-for i in range(10):
+for i in range(165):
     script = get_slurm_script_string(i,i+1)
     
     filename = DIR+f'process_lichess_chunk_{i:03}.slurm'
