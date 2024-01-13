@@ -143,11 +143,14 @@ if __name__ == "__main__":
     if check_files_exist(feather_files):
         print("All feather files already exists")
     else:
+        if not os.path.exists(DIR):
+            os.makedirs(DIR)
+            
         if not os.path.exists(DIR + CSV):
             if not os.path.exists(DIR + ZIP):
                 download_file(URL, DIR + ZIP)
-            else:
-                unzip_file(DIR + ZIP, DIR)
+        
+            unzip_file(DIR + ZIP, DIR)
 
         big_df = pd.read_csv(DIR + CSV, chunksize=CHUNK_SIZE)
         save_data_in_chunks(big_df, CHUNK_SIZE, DIR)
