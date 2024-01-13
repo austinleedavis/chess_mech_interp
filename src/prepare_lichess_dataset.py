@@ -90,6 +90,10 @@ def pgn2uci(pgn_transcript: str) -> str:
         ]
     )
 
+def had_checkmate(pgn_transcript: str) -> bool:
+    return [
+        pgn.strip()[-1] == '#' for pgn in pgn_transcript
+    ]
 
 def batch_offset_mapping_to_move_index(batch_offset_mapping):
     batch_move_indices = []
@@ -139,13 +143,18 @@ if __name__ == "__main__":
     ###
     # Prepare dataset chunks
     ###
+    if not os.path.exists(DIR):
+        os.makedirs(DIR)
+        
+    if not os.path.exists(DIR+'uci/'):
+        os.makedirs(DIR+'uci/')
+        
+
     feather_files = [DIR + f"chunk_{i:03}.feather" for i in range(164)]
     if check_files_exist(feather_files):
         print("All feather files already exists")
     else:
-        if not os.path.exists(DIR):
-            os.makedirs(DIR)
-            
+
         if not os.path.exists(DIR + CSV):
             if not os.path.exists(DIR + ZIP):
                 download_file(URL, DIR + ZIP)
@@ -176,17 +185,29 @@ if __name__ == "__main__":
 
         uci_moves = chunk_df["transcript"].apply(pgn2uci)
 
+        checkmate = chunk_df['transcript'].apply(had_checkmate)
+        
         batch_encoding = model.tokenizer.batch_encode_plus(
             uci_moves.tolist(), return_offsets_mapping=True
         )
         token_to_move_mapping = batch_offset_mapping_to_move_index(
             batch_encoding["offset_mapping"]
         )
-        num_tokens = [len(row) for row in batch_encoding["input_ids"]]
+        
+        # add EOS_token_ID whenever checkmate happens
+        eos_tok_id = model.tokenizer.encode('</s>') #id=2
+        input_ids = batch_encoding["input_ids"]
+        input_ids = [ids + [eos_tok_id] if check else ids for ids, check in zip(input_ids, checkmate)]
+        
+        num_tokens = [len(row) for row in input_ids]
 
         chunk_df["num_tokens"] = num_tokens
         chunk_df["uci_moves"] = uci_moves
-        chunk_df["tokens_int"] = batch_encoding["input_ids"]
+        chunk_df["tokens_int"] = input_ids
         chunk_df["token2move"] = token_to_move_mapping
+        chunk_df['checkmate'] = checkmate
         chunk_df.to_feather(file)
         print(f"\nUpdated and Saved: {file}\n")
+        
+        # save uci_moves for model training
+        chunk_df['uci_moves'].to_csv(DIR+f'uci/{file}.txt', header=False) #read with header=None
