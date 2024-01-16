@@ -1,5 +1,8 @@
 ## models and probes
 
+*.pth
+*.pt
+
 *scratchpad.py
 chess_data/
 mi_data/

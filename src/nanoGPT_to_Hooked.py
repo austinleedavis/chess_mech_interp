@@ -23,28 +23,26 @@ import os
 # This code was developed using Neel Nanda's othello_reference/Othello_GPT.ipynb as a reference.
 # Once again, I just copy pasted the relevant cells into here for convenience. Sorry for the messiness.
 
-torch.set_grad_enabled(False)
+
+
+output_filename = 'lichess_uci_all_elos_8layers'
 
 LOAD_AND_CONVERT_CHECKPOINT = True
+MODEL_DIR = "./models/"
+checkpoint_filename = "ckpt.pt"
 
+PUSH_TO_HUB = True
+
+
+torch.set_grad_enabled(False)
 device = "cpu"
 
-MODEL_DIR = "./models/"
-
-model_name = "ckpt.pt"
-# print(os.getcwd())
-# print(os.path.abspath(f'{MODEL_DIR}{model_name}'))
-# print(f'{MODEL_DIR}{model_name}')
-# print(os.path.exists(f'{MODEL_DIR}{model_name}'))
-# exit()
-
-if not os.path.exists(f"{MODEL_DIR}{model_name}"):
-    state_dict = utils.download_file_from_hf("adamkarvonen/chess_llms", model_name)
+if not os.path.exists(f"{MODEL_DIR}{checkpoint_filename}") and not LOAD_AND_CONVERT_CHECKPOINT:
+    state_dict = utils.download_file_from_hf("austindavis/chess_llms", checkpoint_filename)
     model = torch.load(state_dict, map_location=device)
-    torch.save(model, f"{MODEL_DIR}{model_name}")
+    torch.save(model, f"{MODEL_DIR}{checkpoint_filename}")
 
-
-checkpoint = torch.load(f"{MODEL_DIR}{model_name}", map_location=device)
+checkpoint = torch.load(f"{MODEL_DIR}{checkpoint_filename}", map_location=device)
 
 # Print the keys of the checkpoint dictionary
 print(checkpoint.keys())
@@ -171,6 +169,7 @@ if LOAD_AND_CONVERT_CHECKPOINT:
         n_ctx=checkpoint["config"]['block_size'],
         act_fn="gelu",
         normalization_type="LNPre",
+        model_name=output_filename,
     )
     model = HookedTransformer(cfg)
     model.to(device)
@@ -178,7 +177,14 @@ if LOAD_AND_CONVERT_CHECKPOINT:
     model.load_and_process_state_dict(
         convert_nanogpt_weights(synthetic_checkpoint, cfg)
     )
-    recorded_model_name = model_name.split(".")[0]
-    torch.save(model.state_dict(), f"{MODEL_DIR}tf_lens_{recorded_model_name}_state_dict.pth")
-    torch.save(model,f"{MODEL_DIR}tf_lens_full_{recorded_model_name}_model.pth")
-    torch.save(model.cfg,f"{MODEL_DIR}tf_lens_full_{recorded_model_name}_cfg.pth")
+    
+        
+    from transformers import PreTrainedTokenizerFast
+    
+    tokenizer = PreTrainedTokenizerFast.from_pretrained('austindavis/chess_llms')
+    
+    model.tokenizer = tokenizer
+    
+    torch.save(model.state_dict(), f"{MODEL_DIR}tf_lens_{output_filename}_state_dict.pth")
+    torch.save(model,f"{MODEL_DIR}tf_lens_full_{output_filename}_model.pth")
+    torch.save(model.cfg,f"{MODEL_DIR}tf_lens_full_{output_filename}_cfg.pth")

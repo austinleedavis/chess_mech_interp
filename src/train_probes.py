@@ -1,3 +1,5 @@
+print("Running train_probes.py")
+
 import os
 import argparse
 from dataclasses import dataclass
@@ -16,8 +18,8 @@ from enum import Enum
 import board_state_functions
 import utils
 
-WANDB_LOG = False
-RELOAD_FROM_CHECKPOINT = False
+WANDB_LOG = True
+RELOAD_FROM_CHECKPOINT = True
 
 
 @dataclass
@@ -43,7 +45,7 @@ class ProbeType(Enum):
     )
     
     COLOR_FLIPPED = ProbeConfig(
-        "color_probe",
+        "color_probe_flipped",
         3,  # white, black, none
         board_state_functions.df_to_color_state_flip_player,
     )
@@ -81,8 +83,10 @@ class ProbeTrainer:
     probe_ext = ".pth"
     probe_dir = "linear_probes/saved_probes/"
     checkpoint_filename: str
+    pos_slice = slice(2,-1,4)
 
     def __init__(self):
+        print("Initializing Probe")
         parser = initialize_argparser()
         args = parser.parse_args()
 
@@ -107,8 +111,9 @@ class ProbeTrainer:
         )
 
         self.run_name = (
-            f"{self.probe_config.linear_probe_name}_"
-            f"{self.probe_config.model.cfg.model_name}_"
+            # f"{self.probe_config.linear_probe_name}_"
+            # f"{self.probe_config.model.cfg.model_name}_"
+            f"color_pos_{self.pos_slice}_"
             f"layer_{self.probe_config.target_layer}_"
             f"indexing_{self.probe_config.custom_board_state_function.__name__}"
         )
@@ -146,17 +151,22 @@ class ProbeTrainer:
             "wandb_project": project_name,
             "wandb_run_name": self.run_name,
             "dataset_prefix": self.dataset_prefix,
+            "token_slice": self.pos_slice
         }
 
         if WANDB_LOG:
             wandb.init(
                 project=project_name, name=self.run_name, config=self.logging_dict
             )
+        
+        print('Probe initialized with config:\n', self.logging_dict)
 
     def train(
         self,
     ):
+        print("Begging Training")
         for epoch in range(self.num_epochs):
+            print(f"Epoch {epoch}")
             for batch_idx, (batch_residuals, batch_labels) in enumerate(
                 utils.get_batches(
                     full_df=self.df,
@@ -167,12 +177,20 @@ class ProbeTrainer:
                 )
             ):
                 
+                # Select every 4th pos from residuals and labels
+                batch_residuals = batch_residuals[:,1:-1:4,:]
+                batch_labels = batch_labels[:,1:-1:4,...]
+                
+                # print('batch_labels.shape: ', batch_labels.shape)
+                # print('batch_residuals.shape: ', batch_residuals.shape)
                 # Forward pass using einsum
                 probe_output: torch.Tensor = einops.einsum(
                     batch_residuals,
                     self.linear_probe,
                     "batch pos d_model, d_model rows cols classes -> batch pos rows cols classes",
                 )
+                
+                # print('probe_output.shape: ',probe_output.shape)
 
                 # residuals: torch.Size([batch, pos, 768])
                 # probe:    torch.Size([768, 8, 8, 3])
@@ -212,7 +230,7 @@ class ProbeTrainer:
 
                     checkpoint.update(self.logging_dict)
                     print("SKIP SAVE!")
-                    # torch.save(checkpoint, self.checkpoint_filename)
+                    torch.save(checkpoint, self.checkpoint_filename)
 
                     if epoch % 1 == 0:
                         print(

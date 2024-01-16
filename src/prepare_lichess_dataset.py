@@ -1,3 +1,7 @@
+
+
+# TODO This file uses old tokenization scheme. Needs to be updated
+
 import os
 import io
 from typing import Tuple
@@ -162,7 +166,7 @@ if __name__ == "__main__":
             unzip_file(DIR + ZIP, DIR)
 
         big_df = pd.read_csv(DIR + CSV, chunksize=CHUNK_SIZE)
-        save_data_in_chunks(big_df, CHUNK_SIZE, DIR)
+        save_data_in_chunks(big_df, CHUNK_SIZE, DIR+'feathers/')
 
         del big_df
 
@@ -174,7 +178,7 @@ if __name__ == "__main__":
         make_official(), device="cpu"
     )  # using it for encoding only
     chunk_files = [
-        os.path.join(DIR, f) for f in os.listdir(DIR) if f.startswith("chunk_")
+        os.path.join(DIR, f) for f in os.listdir(DIR+'feathers/') if f.startswith("chunk_")
     ]
 
     chunk_files = sorted(chunk_files)[int(args.chunk_min) : int(args.chunk_max)]
