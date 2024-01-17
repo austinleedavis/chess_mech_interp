@@ -37,19 +37,20 @@ class DataSetSplits(Enum):
     TRAIN = "train"
     TEST = "test"
 
+
 class ProbeType(Enum):
     COLOR = ProbeConfig(
         "color_probe",
         3,  # white, black, none
         board_state_functions.df_to_color_state,
     )
-    
+
     COLOR_FLIPPED = ProbeConfig(
         "color_probe_flipped",
         3,  # white, black, none
         board_state_functions.df_to_color_state_flip_player,
     )
-    
+
     PIECE = ProbeConfig(
         "piece_probe",
         13,  # one of: KQBRNPkqbrnp or 'empty'
@@ -83,7 +84,7 @@ class ProbeTrainer:
     probe_ext = ".pth"
     probe_dir = "linear_probes/saved_probes/"
     checkpoint_filename: str
-    pos_slice = slice(2,-1,4)
+    pos_slice = slice(2, -1, 4)
 
     def __init__(self):
         print("Initializing Probe")
@@ -133,7 +134,7 @@ class ProbeTrainer:
             weight_decay=self.wd,
         )
         self.scheduler = torch.optim.lr_scheduler.LinearLR(
-            self.optimizer, start_factor=1.0 / 10, total_iters=len(self.df)
+            self.optimizer, start_factor=1.0, end_factor=0.0001, total_iters=len(self.df)
         )
 
         project_name = "mech_interp_chess"
@@ -151,15 +152,27 @@ class ProbeTrainer:
             "wandb_project": project_name,
             "wandb_run_name": self.run_name,
             "dataset_prefix": self.dataset_prefix,
-            "token_slice": self.pos_slice
+            "batch_size": self.batch_size,
+            "learning_rate": self.learning_rate,
+            "weight_decay": self.weight_decay,
+            "wd": self.wd,
+            "betas": self.betas,
+            "split": self.split,
+            "dataset_dir": self.dataset_dir,
+            "criterion": self.criterion,
+            "optimizer": self.optimizer,
+            "probe_ext": self.probe_ext,
+            "probe_dir": self.probe_dir,
+            "checkpoint_filename": self.checkpoint_filename,
+            "pos_slice": self.pos_slice,
         }
 
         if WANDB_LOG:
             wandb.init(
                 project=project_name, name=self.run_name, config=self.logging_dict
             )
-        
-        print('Probe initialized with config:\n', self.logging_dict)
+
+        print("Probe initialized with config:\n", self.logging_dict)
 
     def train(
         self,
@@ -176,28 +189,21 @@ class ProbeTrainer:
                     model=self.probe_config.model,
                 )
             ):
-                
-                # Select every 4th pos from residuals and labels
-                batch_residuals = batch_residuals[:,1:-1:4,:]
-                batch_labels = batch_labels[:,1:-1:4,...]
-                
-                # print('batch_labels.shape: ', batch_labels.shape)
-                # print('batch_residuals.shape: ', batch_residuals.shape)
+                # use slice to downselect batch elements
+                batch_residuals = batch_residuals[:, self.pos_slice, :]
+                batch_labels = batch_labels[:, self.pos_slice, ...]
+
                 # Forward pass using einsum
                 probe_output: torch.Tensor = einops.einsum(
                     batch_residuals,
                     self.linear_probe,
                     "batch pos d_model, d_model rows cols classes -> batch pos rows cols classes",
                 )
-                
-                # print('probe_output.shape: ',probe_output.shape)
 
                 # residuals: torch.Size([batch, pos, 768])
                 # probe:    torch.Size([768, 8, 8, 3])
                 # batch_labels:  torch.Size([batch, 126, 8, 8, 3]) -> torch.Size([403200, 3])
                 # output:   torch.Size([batch, 126, 8, 8, 3]) -> torch.Size([403200, 3])
-
-                # Reshape probe_output and batch_labels for CrossEntropyLoss
 
                 # Assumes final dim is the class
                 # probe_output = probe_output.flatten(0, -2)
@@ -246,6 +252,11 @@ class ProbeTrainer:
                                     "batch": batch_idx,
                                 }
                             )
+        # Training is finished. Log probe weights to WANDB
+        artifact = wandb.Artifact(self.wandb_run_name + "_model", type="model")
+        artifact.add_file(self.checkpoint_filename)
+        wandb.log_artifact(artifact)
+        wandb.finish()
 
     def initialize_probe_tensor(self, reload_checkpoint=True) -> torch.Tensor:
         if reload_checkpoint and os.path.exists(self.checkpoint_filename):
@@ -301,7 +312,7 @@ def initialize_argparser():
     parser.add_argument(
         "--target_layer",
         type=int,
-        default=0,
+        default=-1,
         help="Optional. Target layer number (Default: -1)",
     )
 
@@ -335,8 +346,8 @@ def initialize_argparser():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=100,
-        help="Optional. batch sizes (Default: 100)",
+        default=50,
+        help="Optional. batch sizes (Default: 50)",
     )
 
     return parser
