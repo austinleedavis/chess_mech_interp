@@ -5,6 +5,7 @@ print(' '.join(sys.argv))
 
 
 import os
+import math
 import argparse
 from dataclasses import dataclass
 from typing import Literal, Callable, Any, List
@@ -123,7 +124,7 @@ class ProbeTrainer:
         self.df = pd.read_pickle(
             f"{self.dataset_dir}{self.dataset_prefix}{self.split}.pkl"
         )
-        self.max_iters = len(self.df)
+        self.max_iters = math.ceil(len(self.df) / self.batch_size) * self.num_epochs
 
         self.run_name = (
             f"color_"
@@ -220,6 +221,7 @@ class ProbeTrainer:
         self,
     ):
         print("Begining Training")
+        iters = 0
         for epoch in range(self.num_epochs):
             print(f"Epoch {epoch}")
             for batch_idx, (batch_residuals, batch_labels) in enumerate(
@@ -231,6 +233,7 @@ class ProbeTrainer:
                     model=self.probe_config.model,
                 )
             ):
+                
                 # lr = self.get_lr(batch_idx, self.max_iters, self.max_lr, self.min_lr)
                 # for param_group in self.optimizer.param_groups:
                 #     param_group["lr"] = lr
@@ -263,7 +266,9 @@ class ProbeTrainer:
                 loss.backward()
                 self.optimizer.step()
                 self.scheduler.step()
-
+                
+                iters += self.batch_size
+                
                 if (batch_idx) % 50 == 0:
                     accuracy = (
                         (probe_output.argmax(-1) == batch_labels.argmax(-1))
@@ -280,6 +285,7 @@ class ProbeTrainer:
                         "linear_probe": self.linear_probe,
                         "batch": batch_idx,
                         "epoch": epoch,
+                        "iter": iters,
                     }
 
                     checkpoint.update(self.logging_dict)
@@ -300,6 +306,7 @@ class ProbeTrainer:
                                     ),  # self.scheduler.get_last_lr()[0],
                                     "epoch": epoch,
                                     "batch": batch_idx,
+                                    "iter": iters,
                                 }
                             )
         # Training is finished. Log probe weights to WANDB
