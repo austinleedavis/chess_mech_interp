@@ -19,7 +19,7 @@ import board_state_functions
 import utils
 
 WANDB_LOG = True
-RELOAD_FROM_CHECKPOINT = True
+RELOAD_FROM_CHECKPOINT = False
 
 
 @dataclass
@@ -70,11 +70,12 @@ class ProbeTrainer:
     batch_size: int
 
     max_lr = 3e-3
-    min_lr = max_lr /100
+    min_lr = max_lr / 100
     weight_decay = 0.01
     wd = 0.01
     betas = (0.9, 0.99)
 
+    max_iters: int
     probe_config: ProbeConfig
     split: str
     dataset_prefix: str
@@ -86,8 +87,7 @@ class ProbeTrainer:
     probe_ext = ".pth"
     probe_dir = "linear_probes/saved_probes/"
     checkpoint_filename: str
-    pos_slice = slice(2, -1, 4)
-    
+    pos_slice = slice(0, -1, 4)
 
     def __init__(self):
         print("Initializing Probe")
@@ -113,13 +113,13 @@ class ProbeTrainer:
         self.df = pd.read_pickle(
             f"{self.dataset_dir}{self.dataset_prefix}{self.split}.pkl"
         )
+        self.max_iters = len(self.df)
 
         self.run_name = (
-            # f"{self.probe_config.linear_probe_name}_"
-            # f"{self.probe_config.model.cfg.model_name}_"
-            f"color_pos_{self.pos_slice}_"
+            f"color_"
             f"layer_{self.probe_config.target_layer}_"
-            f"indexing_{self.probe_config.custom_board_state_function.__name__}"
+            f"pos_{self.pos_slice.start}_{self.pos_slice.stop}_{self.pos_slice.step}_"
+            f"{self.probe_config.custom_board_state_function.__name__}"
         )
 
         # Initialize the linear probe tensor
@@ -169,7 +169,7 @@ class ProbeTrainer:
             "pos_slice": self.pos_slice,
             "lr": self.max_lr,
             "min_lr": self.min_lr,
-            "max_lr": self.max_lr
+            "max_lr": self.max_lr,
         }
 
         if WANDB_LOG:
@@ -179,8 +179,9 @@ class ProbeTrainer:
 
         print("Probe initialized with config:\n", self.logging_dict)
 
-    
-    def get_lr(current_iter: int, max_iters: int, max_lr: float, min_lr: float) -> float:
+    def get_lr(
+        self, current_iter: int, max_iters: int, max_lr: float, min_lr: float
+    ) -> float:
         """
         Calculate the learning rate using linear decay.
 
@@ -200,11 +201,11 @@ class ProbeTrainer:
         decayed_lr = max_lr - (max_lr - min_lr) * (current_iter / max_iters)
 
         return decayed_lr
-    
+
     def train(
         self,
     ):
-        print("Begging Training")
+        print("Begining Training")
         for epoch in range(self.num_epochs):
             print(f"Epoch {epoch}")
             for batch_idx, (batch_residuals, batch_labels) in enumerate(
@@ -216,10 +217,10 @@ class ProbeTrainer:
                     model=self.probe_config.model,
                 )
             ):
-                lr = self.get_lr(batch_idx, len(self.df),self.max_lr, self.min_lr)
-                for param_group in self.optimizer.paramg_groups:
-                    param_group['lr'] = lr
-                    
+                lr = self.get_lr(batch_idx, self.max_iters, self.max_lr, self.min_lr)
+                for param_group in self.optimizer.param_groups:
+                    param_group["lr"] = lr
+
                 # use slice to downselect batch elements
                 batch_residuals = batch_residuals[:, self.pos_slice, :]
                 batch_labels = batch_labels[:, self.pos_slice, ...]
@@ -243,9 +244,7 @@ class ProbeTrainer:
                 # Calculate loss
                 loss = self.criterion(probe_output, batch_labels)
 
-                accuracy = (
-                    (probe_output.argmax(-1) == batch_labels.argmax(-1)).float().mean()
-                )
+
 
                 # Backward and optimize
                 self.optimizer.zero_grad()
@@ -253,11 +252,16 @@ class ProbeTrainer:
                 self.optimizer.step()
                 # self.scheduler.step()
 
-                if (batch_idx + 1) % 20 == 0:
+                if (batch_idx) % 50 == 0:
+                    
+                    accuracy = (
+                       (probe_output.argmax(-1) == batch_labels.argmax(-1)).float().mean()
+                    )
+                    
                     checkpoint = {
                         "acc": accuracy,
                         "loss": loss,
-                        "lr": lr, #self.scheduler.get_last_lr()[0],
+                        "lr": lr,  # self.scheduler.get_last_lr()[0],
                         "epoch": epoch,
                         "batch": batch_idx,
                         "linear_probe": self.linear_probe,
@@ -266,19 +270,19 @@ class ProbeTrainer:
                     }
 
                     checkpoint.update(self.logging_dict)
-                    print("SKIP SAVE!")
+
                     torch.save(checkpoint, self.checkpoint_filename)
 
                     if epoch % 1 == 0:
                         print(
-                            f"Epoch [{epoch + 1}/{self.num_epochs}], Batch: {batch_idx} Loss: {loss.item():.4f} Acc: {accuracy}"
+                            f"Epoch [{epoch + 1}/{self.num_epochs}], Batch: {batch_idx} Loss: {loss.item():.4f} Acc: {accuracy} Lr: {lr}"
                         )
                         if WANDB_LOG:
                             wandb.log(
                                 {
                                     "acc": accuracy,
                                     "loss": loss,
-                                    "lr": lr, #self.scheduler.get_last_lr()[0],
+                                    "lr": lr,  # self.scheduler.get_last_lr()[0],
                                     "epoch": epoch,
                                     "batch": batch_idx,
                                 }
