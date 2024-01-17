@@ -22,7 +22,7 @@ from enum import Enum
 import board_state_functions
 import utils
 
-WANDB_LOG = False
+WANDB_LOG = True
 RELOAD_FROM_CHECKPOINT = False
 
 
