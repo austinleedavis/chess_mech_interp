@@ -69,8 +69,8 @@ class ProbeTrainer:
     num_epochs: int
     batch_size: int
 
-    max_lr = 3e-4
-    min_lr = max_lr /10
+    max_lr = 3e-3
+    min_lr = max_lr /100
     weight_decay = 0.01
     wd = 0.01
     betas = (0.9, 0.99)
@@ -179,6 +179,27 @@ class ProbeTrainer:
 
         print("Probe initialized with config:\n", self.logging_dict)
 
+    
+    def get_lr(current_iter: int, max_iters: int, max_lr: float, min_lr: float) -> float:
+        """
+        Calculate the learning rate using linear decay.
+
+        Args:
+        - current_iter (int): The current iteration.
+        - max_iters (int): The total number of iterations for decay.
+        - lr (float): The initial learning rate.
+        - min_lr (float): The minimum learning rate after decay.
+
+        Returns:
+        - float: The calculated learning rate.
+        """
+        # Ensure current_iter does not exceed max_iters
+        current_iter = min(current_iter, max_iters)
+
+        # Calculate the linearly decayed learning rate
+        decayed_lr = max_lr - (max_lr - min_lr) * (current_iter / max_iters)
+
+        return decayed_lr
     
     def train(
         self,
