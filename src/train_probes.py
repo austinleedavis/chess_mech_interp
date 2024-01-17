@@ -266,14 +266,13 @@ class ProbeTrainer:
                 
                 # Backward and optimize
                 self.optimizer.zero_grad()
-                
+                loss.backward()
                 self.optimizer.step()
-                self.scheduler.step()
                 
                 iters += self.batch_size
                 
                 if (batch_idx) % 50 == 0:
-                    loss.backward()
+                    self.scheduler.step()
                     accuracy = (
                         (probe_output.argmax(-1) == batch_labels.argmax(-1))
                         .float()
