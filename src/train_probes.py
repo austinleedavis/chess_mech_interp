@@ -68,7 +68,9 @@ class ProbeTrainer:
     # Training parameters
     num_epochs: int
     batch_size: int
-    learning_rate = 0.001
+
+    max_lr = 3e-4
+    min_lr = max_lr /10
     weight_decay = 0.01
     wd = 0.01
     betas = (0.9, 0.99)
@@ -85,6 +87,7 @@ class ProbeTrainer:
     probe_dir = "linear_probes/saved_probes/"
     checkpoint_filename: str
     pos_slice = slice(2, -1, 4)
+    
 
     def __init__(self):
         print("Initializing Probe")
@@ -129,13 +132,13 @@ class ProbeTrainer:
         self.criterion = torch.nn.CrossEntropyLoss()
         self.optimizer = torch.optim.AdamW(
             [self.linear_probe],
-            lr=self.learning_rate,
+            lr=self.max_lr,
             betas=self.betas,
             weight_decay=self.wd,
         )
-        self.scheduler = torch.optim.lr_scheduler.LinearLR(
-            self.optimizer, start_factor=1.0, end_factor=0.0001, total_iters=len(self.df)
-        )
+        # self.scheduler = torch.optim.lr_scheduler.LinearLR(
+        #     self.optimizer, start_factor=1.0, end_factor=0.0001, total_iters=len(self.df)
+        # )
 
         project_name = "mech_interp_chess"
 
@@ -153,7 +156,6 @@ class ProbeTrainer:
             "wandb_run_name": self.run_name,
             "dataset_prefix": self.dataset_prefix,
             "batch_size": self.batch_size,
-            "learning_rate": self.learning_rate,
             "weight_decay": self.weight_decay,
             "wd": self.wd,
             "betas": self.betas,
@@ -165,6 +167,9 @@ class ProbeTrainer:
             "probe_dir": self.probe_dir,
             "checkpoint_filename": self.checkpoint_filename,
             "pos_slice": self.pos_slice,
+            "lr": self.max_lr,
+            "min_lr": self.min_lr,
+            "max_lr": self.max_lr
         }
 
         if WANDB_LOG:
@@ -174,6 +179,7 @@ class ProbeTrainer:
 
         print("Probe initialized with config:\n", self.logging_dict)
 
+    
     def train(
         self,
     ):
@@ -189,6 +195,10 @@ class ProbeTrainer:
                     model=self.probe_config.model,
                 )
             ):
+                lr = self.get_lr(batch_idx, len(self.df),self.max_lr, self.min_lr)
+                for param_group in self.optimizer.paramg_groups:
+                    param_group['lr'] = lr
+                    
                 # use slice to downselect batch elements
                 batch_residuals = batch_residuals[:, self.pos_slice, :]
                 batch_labels = batch_labels[:, self.pos_slice, ...]
@@ -220,13 +230,13 @@ class ProbeTrainer:
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-                self.scheduler.step()
+                # self.scheduler.step()
 
                 if (batch_idx + 1) % 20 == 0:
                     checkpoint = {
                         "acc": accuracy,
                         "loss": loss,
-                        "lr": self.scheduler.get_last_lr()[0],
+                        "lr": lr, #self.scheduler.get_last_lr()[0],
                         "epoch": epoch,
                         "batch": batch_idx,
                         "linear_probe": self.linear_probe,
@@ -240,14 +250,14 @@ class ProbeTrainer:
 
                     if epoch % 1 == 0:
                         print(
-                            f"Epoch [{epoch + 1}/{self.num_epochs}], Loss: {loss.item():.4f}"
+                            f"Epoch [{epoch + 1}/{self.num_epochs}], Batch: {batch_idx} Loss: {loss.item():.4f} Acc: {accuracy}"
                         )
                         if WANDB_LOG:
                             wandb.log(
                                 {
                                     "acc": accuracy,
                                     "loss": loss,
-                                    "lr": self.scheduler.get_last_lr()[0],
+                                    "lr": lr, #self.scheduler.get_last_lr()[0],
                                     "epoch": epoch,
                                     "batch": batch_idx,
                                 }
