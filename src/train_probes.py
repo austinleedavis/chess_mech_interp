@@ -1,4 +1,8 @@
+import sys
 print("Running train_probes.py")
+print(' '.join(sys.argv))
+
+
 
 import os
 import argparse
@@ -18,8 +22,9 @@ from enum import Enum
 import board_state_functions
 import utils
 
-WANDB_LOG = True
+WANDB_LOG = False
 RELOAD_FROM_CHECKPOINT = False
+
 
 @dataclass
 class ProbeConfig:
@@ -68,7 +73,7 @@ class ProbeTrainer:
     num_epochs: int
     batch_size: int
 
-    max_lr = 3e-3
+    max_lr = 1e-3
     min_lr = max_lr / 100
     weight_decay = 0.01
     wd = 0.01
@@ -82,6 +87,7 @@ class ProbeTrainer:
     linear_probe: torch.Tensor
     criterion: torch.nn.Module
     optimizer: torch.optim.Optimizer
+    scheduler: torch.optim.lr_scheduler.LRScheduler
     run_name: str
     probe_ext = ".pth"
     probe_dir = "linear_probes/saved_probes/"
@@ -92,6 +98,11 @@ class ProbeTrainer:
         print("Initializing Probe")
         parser = initialize_argparser()
         args = parser.parse_args()
+        
+        if args.slice is not None:
+            print("Range argument was given")
+            start, stop, step = args.slice
+            self.pos_slice = slice(start,stop,step)
 
         self.num_epochs = args.epochs
         self.batch_size = args.batch_size
@@ -168,9 +179,10 @@ class ProbeTrainer:
             "checkpoint_filename": self.checkpoint_filename,
             "pos_slice": self.pos_slice,
             "lr": max(self.scheduler.get_last_lr()),
-            # "min_lr": self.min_lr,
-            # "max_lr": self.max_lr,
+            "min_lr": self.min_lr,
+            "max_lr": self.max_lr,
             "RELOAD_FROM_CHECKPOINT": RELOAD_FROM_CHECKPOINT,
+            'function_call': ' '.join(sys.argv),
         }
 
         if WANDB_LOG:
@@ -245,8 +257,6 @@ class ProbeTrainer:
                 # Calculate loss
                 loss = self.criterion(probe_output, batch_labels)
 
-
-
                 # Backward and optimize
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -254,11 +264,12 @@ class ProbeTrainer:
                 self.scheduler.step()
 
                 if (batch_idx) % 50 == 0:
-                    
                     accuracy = (
-                       (probe_output.argmax(-1) == batch_labels.argmax(-1)).float().mean()
+                        (probe_output.argmax(-1) == batch_labels.argmax(-1))
+                        .float()
+                        .mean()
                     )
-                    
+
                     checkpoint = {
                         "acc": accuracy,
                         "loss": loss,
@@ -276,14 +287,16 @@ class ProbeTrainer:
 
                     if epoch % 1 == 0:
                         print(
-                            f"Epoch [{epoch + 1}/{self.num_epochs}], Batch: {batch_idx} Loss: {loss.item():.4f} Acc: {accuracy} Lr: {lr}"
+                            f"Epoch [{epoch + 1}/{self.num_epochs}], Batch: {batch_idx} Loss: {loss.item():.4f} Acc: {accuracy} Lr: {max(self.scheduler.get_last_lr())}"
                         )
                         if WANDB_LOG:
                             wandb.log(
                                 {
                                     "acc": accuracy,
                                     "loss": loss,
-                                    "lr": max(self.scheduler.get_last_lr()),  # self.scheduler.get_last_lr()[0],
+                                    "lr": max(
+                                        self.scheduler.get_last_lr()
+                                    ),  # self.scheduler.get_last_lr()[0],
                                     "epoch": epoch,
                                     "batch": batch_idx,
                                 }
@@ -384,6 +397,13 @@ def initialize_argparser():
         type=int,
         default=50,
         help="Optional. batch sizes (Default: 50)",
+    )
+
+    parser.add_argument(
+        "--slice",
+        type=lambda s: [int(item) for item in s.split(":")],
+        default=None,
+        help="Enter a range in the format start:stop:step",
     )
 
     return parser
