@@ -222,6 +222,7 @@ class ProbeTrainer:
     ):
         print("Begining Training")
         iters = 0
+        best_acc = -999.0 
         for epoch in range(self.num_epochs):
             print(f"Epoch {epoch}")
             for batch_idx, (batch_residuals, batch_labels) in enumerate(
@@ -261,15 +262,18 @@ class ProbeTrainer:
                 # Calculate loss
                 loss = self.criterion(probe_output, batch_labels)
 
+                
+                
                 # Backward and optimize
                 self.optimizer.zero_grad()
-                loss.backward()
+                
                 self.optimizer.step()
                 self.scheduler.step()
                 
                 iters += self.batch_size
                 
                 if (batch_idx) % 50 == 0:
+                    loss.backward()
                     accuracy = (
                         (probe_output.argmax(-1) == batch_labels.argmax(-1))
                         .float()
@@ -290,7 +294,9 @@ class ProbeTrainer:
 
                     checkpoint.update(self.logging_dict)
 
-                    torch.save(checkpoint, self.checkpoint_filename)
+                    if accuracy < best_acc:
+                        print("New best acc. Saving checkpoint")
+                        torch.save(checkpoint, self.checkpoint_filename)
 
                     if epoch % 1 == 0:
                         print(
