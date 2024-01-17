@@ -21,7 +21,6 @@ import utils
 WANDB_LOG = True
 RELOAD_FROM_CHECKPOINT = False
 
-
 @dataclass
 class ProbeConfig:
     linear_probe_name: str
@@ -87,7 +86,7 @@ class ProbeTrainer:
     probe_ext = ".pth"
     probe_dir = "linear_probes/saved_probes/"
     checkpoint_filename: str
-    pos_slice = slice(1, -1, 2)
+    pos_slice = slice(0, -20, 4)
 
     def __init__(self):
         print("Initializing Probe")
@@ -136,9 +135,9 @@ class ProbeTrainer:
             betas=self.betas,
             weight_decay=self.wd,
         )
-        # self.scheduler = torch.optim.lr_scheduler.LinearLR(
-        #     self.optimizer, start_factor=1.0, end_factor=0.0001, total_iters=len(self.df)
-        # )
+        self.scheduler = torch.optim.lr_scheduler.LinearLR(
+            self.optimizer, start_factor=1.0 / 10, total_iters=len(self.df)
+        )
 
         project_name = "mech_interp_chess"
 
@@ -162,14 +161,16 @@ class ProbeTrainer:
             "split": self.split,
             "dataset_dir": self.dataset_dir,
             "criterion": self.criterion,
+            "scheduler": self.scheduler,
             "optimizer": self.optimizer,
             "probe_ext": self.probe_ext,
             "probe_dir": self.probe_dir,
             "checkpoint_filename": self.checkpoint_filename,
             "pos_slice": self.pos_slice,
-            "lr": self.max_lr,
-            "min_lr": self.min_lr,
-            "max_lr": self.max_lr,
+            "lr": max(self.scheduler.get_last_lr()),
+            # "min_lr": self.min_lr,
+            # "max_lr": self.max_lr,
+            "RELOAD_FROM_CHECKPOINT": RELOAD_FROM_CHECKPOINT,
         }
 
         if WANDB_LOG:
@@ -217,9 +218,9 @@ class ProbeTrainer:
                     model=self.probe_config.model,
                 )
             ):
-                lr = self.get_lr(batch_idx, self.max_iters, self.max_lr, self.min_lr)
-                for param_group in self.optimizer.param_groups:
-                    param_group["lr"] = lr
+                # lr = self.get_lr(batch_idx, self.max_iters, self.max_lr, self.min_lr)
+                # for param_group in self.optimizer.param_groups:
+                #     param_group["lr"] = lr
 
                 # use slice to downselect batch elements
                 batch_residuals = batch_residuals[:, self.pos_slice, :]
@@ -250,7 +251,7 @@ class ProbeTrainer:
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-                # self.scheduler.step()
+                self.scheduler.step()
 
                 if (batch_idx) % 50 == 0:
                     
@@ -261,7 +262,7 @@ class ProbeTrainer:
                     checkpoint = {
                         "acc": accuracy,
                         "loss": loss,
-                        "lr": lr,  # self.scheduler.get_last_lr()[0],
+                        "lr": max(self.scheduler.get_last_lr()),
                         "epoch": epoch,
                         "batch": batch_idx,
                         "linear_probe": self.linear_probe,
@@ -282,7 +283,7 @@ class ProbeTrainer:
                                 {
                                     "acc": accuracy,
                                     "loss": loss,
-                                    "lr": lr,  # self.scheduler.get_last_lr()[0],
+                                    "lr": max(self.scheduler.get_last_lr()),  # self.scheduler.get_last_lr()[0],
                                     "epoch": epoch,
                                     "batch": batch_idx,
                                 }
