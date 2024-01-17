@@ -99,6 +99,7 @@ class UciTokenizer(PreTrainedTokenizerFast):
         super().__init__(
             tokenizer_object=slow_tokenizer,
             bos_token=";",
+            pad_token=' ',
             name_or_path=None,
             add_bos_token=True,
         )
@@ -108,6 +109,8 @@ class UciTokenizer(PreTrainedTokenizerFast):
         self._tokenizer.decoder = DeSequence(
             [Replace(" ", meta_symbol), Replace(meta_symbol, " ")]
         )
+        self.pad_token = ' '
+        self.pad_token_id = 0
 
 
 if __name__ == "__main__":
