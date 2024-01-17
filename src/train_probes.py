@@ -87,7 +87,7 @@ class ProbeTrainer:
     probe_ext = ".pth"
     probe_dir = "linear_probes/saved_probes/"
     checkpoint_filename: str
-    pos_slice = slice(0, -1, 4)
+    pos_slice = slice(1, -1, 2)
 
     def __init__(self):
         print("Initializing Probe")
@@ -288,7 +288,7 @@ class ProbeTrainer:
                                 }
                             )
         # Training is finished. Log probe weights to WANDB
-        artifact = wandb.Artifact(self.wandb_run_name + "_model", type="model")
+        artifact = wandb.Artifact(self.run_name + "_model", type="model")
         artifact.add_file(self.checkpoint_filename)
         wandb.log_artifact(artifact)
         wandb.finish()
