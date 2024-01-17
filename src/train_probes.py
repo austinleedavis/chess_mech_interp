@@ -265,7 +265,7 @@ class ProbeTrainer:
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-                self.scheduler.step()
+                
                 
                 iters += self.batch_size
                 
@@ -309,6 +309,8 @@ class ProbeTrainer:
                                     "iter": iters,
                                 }
                             )
+            self.scheduler.step()
+            
         # Training is finished. Log probe weights to WANDB
         artifact = wandb.Artifact(self.run_name + "_model", type="model")
         artifact.add_file(self.checkpoint_filename)
