@@ -13,18 +13,13 @@ f"""#!/bin/bash
 #SBATCH --output={DIR}/logs/out-{LAYER:02}-%J.out
 
 module load anaconda/anaconda3
-
 source /apps/anaconda/anaconda3/etc/profile.d/conda.sh
-
 conda activate base
-
 conda activate chess
-
 which python
-
 hostname
-
 pwd
+nvidia-smi
 
 python src/train_probes.py --target_layer {LAYER} --epochs 1 --batch_size 50
 
