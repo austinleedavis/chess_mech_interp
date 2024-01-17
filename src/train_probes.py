@@ -183,6 +183,7 @@ class ProbeTrainer:
             "max_lr": self.max_lr,
             "RELOAD_FROM_CHECKPOINT": RELOAD_FROM_CHECKPOINT,
             'function_call': ' '.join(sys.argv),
+            'job_id':args.jobid,
         }
 
         if WANDB_LOG:
@@ -404,6 +405,13 @@ def initialize_argparser():
         type=lambda s: [int(item) for item in s.split(":")],
         default=None,
         help="Enter a range in the format start:stop:step",
+    )
+    
+    parser.add_argument(
+        "--jobid",
+        type=str,
+        default='',
+        help="Job ID if called from SLURM",
     )
 
     return parser
