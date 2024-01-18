@@ -1,41 +1,39 @@
 import sys
-print("Running train_probes.py")
-print(' '.join(sys.argv))
 
+print("Running train_probes.py")
+print(" ".join(sys.argv))
 
 
 import os
 import math
 import argparse
-from dataclasses import dataclass
-from typing import Literal, Callable, Any, List
+
 import pandas as pd
 import torch
 import numpy as np
 import wandb
-
-# import fancy_einsum as fancy
 import einops
 from mech_interp.fixTL import make_official
 from transformers import PreTrainedTokenizerFast
 from transformer_lens import HookedTransformer
+from dataclasses import field, dataclass
+from typing import Callable, Any, List
 from enum import Enum
 import board_state_functions
+import pandas as pd
 import utils
 
 WANDB_LOG = True
 RELOAD_FROM_CHECKPOINT = False
 
-
 @dataclass
 class ProbeConfig:
-    linear_probe_name: str
     num_classes: int
     custom_board_state_function: Callable[[pd.DataFrame], List[Any]]
     num_rows: int = 8
     num_cols: int = 8
     target_layer: int = -1
-    model: HookedTransformer = None
+    slicer: Any = field(default_factory=lambda: slice(None))
 
 
 class DataSetSplits(Enum):
@@ -44,24 +42,61 @@ class DataSetSplits(Enum):
 
 
 class ProbeType(Enum):
-    COLOR = ProbeConfig(
-        "color_probe",
-        3,  # white, black, none
-        board_state_functions.df_to_color_state,
-    )
+    COLOR_0, COLOR_1, COLOR_2, COLOR_3 = [
+        ProbeConfig(
+            3,  # white, black, none
+            board_state_functions.to_color,
+            slicer=slice(start, -1, 4),
+        )
+        for start in range(4)
+    ]
 
-    COLOR_FLIPPED = ProbeConfig(
-        "color_probe_flipped",
-        3,  # white, black, none
-        board_state_functions.df_to_color_state_flip_player,
-    )
+    COLOR_FLIPPING_0, COLOR_FLIPPING_1 = [
+        ProbeConfig(
+            3,  # white, black, none
+            board_state_functions.to_color_flipping,
+            slicer=slice(start, -1, 2),
+        )
+        for start in range(2)
+    ]
 
-    PIECE = ProbeConfig(
-        "piece_probe",
-        13,  # one of: KQBRNPkqbrnp or 'empty'
-        board_state_functions.df_to_piece_state,
-    )
-
+    PIECE_ANY_0, PIECE_ANY_1 = [
+        ProbeConfig(
+            7,  # one of: KQBRNP or 'empty'
+            board_state_functions.to_piece,
+            slicer=slice(start,-1,2),
+        )
+        for start in range(2)
+    ]
+    
+    PIECE_BY_COLOR_0, PIECE_BY_COLOR_1 = [
+        ProbeConfig(
+            13,  # one of: KQBRNPkqbrnp or 'empty'
+            board_state_functions.to_piece_by_color,
+            slicer=slice(start,-1,2),
+        )
+        for start in range(2)
+    ]
+    
+    MY_CONTROLLED_0, MY_CONTROLLED_1 = [
+        ProbeConfig(
+            64,  # one vector for each tile
+            board_state_functions.to_my_controlled_tiles,
+            slicer=slice(start,-1,2),
+        )
+        for start in range(2)
+    ]
+    
+    THEIR_CONTROLLED_0, THEIR_CONTROLLED_1 = [
+        ProbeConfig(
+            64,  # one vector for each tile
+            board_state_functions.to_my_controlled_tiles,
+            slicer=slice(start,-1,2),
+        )
+        for start in range(2)
+    ]
+    
+    
     def from_str(probe_type: str):
         for enum_val in ProbeType:
             if enum_val.name == probe_type.upper():
@@ -82,6 +117,7 @@ class ProbeTrainer:
 
     max_iters: int
     probe_config: ProbeConfig
+    model: HookedTransformer
     split: str
     dataset_prefix: str
     dataset_dir: str
@@ -93,26 +129,27 @@ class ProbeTrainer:
     probe_ext = ".pth"
     probe_dir = "linear_probes/saved_probes/"
     checkpoint_filename: str
-    pos_slice = slice(0, -20, 4)
 
     def __init__(self):
         print("Initializing Probe")
         parser = initialize_argparser()
         args = parser.parse_args()
-        
-        if args.slice is not None:
-            print("Range argument was given")
-            start, stop, step = args.slice
-            self.pos_slice = slice(start,stop,step)
+
 
         self.num_epochs = args.epochs
         self.batch_size = args.batch_size
 
         # Setup the probe config
         self.probe_config = ProbeType.from_str(args.probe_type).value
+        
+        if args.slice is not None:
+            print("Range argument was given. Overriding default probe slice.")
+            start, stop, step = args.slice
+            self.probe_config.slicer = slice(start, stop, step)
+        
         MODEL_NAME = make_official()
         tokenizer = PreTrainedTokenizerFast.from_pretrained(MODEL_NAME)
-        self.probe_config.model = HookedTransformer.from_pretrained(
+        self.model = HookedTransformer.from_pretrained(
             MODEL_NAME, tokenizer=tokenizer
         )
         self.probe_config.target_layer = args.target_layer
@@ -127,15 +164,16 @@ class ProbeTrainer:
         self.max_iters = math.ceil(len(self.df) / self.batch_size) * self.num_epochs
 
         self.run_name = (
-            f"color_"
-            f"layer_{self.probe_config.target_layer}_"
-            f"pos_{self.pos_slice.start}_{self.pos_slice.stop}_{self.pos_slice.step}_"
             f"{self.probe_config.custom_board_state_function.__name__}"
+            f"{self.probe_config.slicer}"
+            f"layer_{self.probe_config.target_layer}_"
         )
 
         # Initialize the linear probe tensor
         self.checkpoint_filename = self.probe_dir + self.run_name + self.probe_ext
         print("Probe will be saved to ", self.checkpoint_filename)
+        if not os.path.exists(self.probe_dir):
+            os.makedirs(self.probe_dir,exist_ok=True)
 
         self.linear_probe = self.initialize_probe_tensor(RELOAD_FROM_CHECKPOINT)
 
@@ -151,19 +189,17 @@ class ProbeTrainer:
             self.optimizer, start_factor=1.0 / 10, total_iters=len(self.df)
         )
 
-        project_name = "mech_interp_chess"
+        wandb_project_name = "chess_linear_probes"
 
         self.logging_dict = {
-            "linear_probe_name": self.probe_config.linear_probe_name,
-            "model_name": self.probe_config.model.cfg.model_name,
-            "layer": self.probe_config.target_layer,
-            "indexing_function_name": self.probe_config.custom_board_state_function.__name__,
+            # "linear_probe": self.linear_probe,
+            "probe_config": self.probe_config,
             "batch_size": self.batch_size,
             "wd": self.wd,
             "split": self.split,
             "num_epochs": self.num_epochs,
             "num_classes": self.probe_config.num_classes,
-            "wandb_project": project_name,
+            "wandb_project": wandb_project_name,
             "wandb_run_name": self.run_name,
             "dataset_prefix": self.dataset_prefix,
             "batch_size": self.batch_size,
@@ -178,19 +214,24 @@ class ProbeTrainer:
             "probe_ext": self.probe_ext,
             "probe_dir": self.probe_dir,
             "checkpoint_filename": self.checkpoint_filename,
-            "pos_slice": self.pos_slice,
             "lr": max(self.scheduler.get_last_lr()),
             "min_lr": self.min_lr,
             "max_lr": self.max_lr,
             "RELOAD_FROM_CHECKPOINT": RELOAD_FROM_CHECKPOINT,
-            'function_call': ' '.join(sys.argv),
-            'job_id':args.jobid,
+            "function_call": " ".join(sys.argv),
+            "job_id": args.jobid,
         }
 
         if WANDB_LOG:
             wandb.init(
-                project=project_name, name=self.run_name, config=self.logging_dict
+                project=wandb_project_name, name=self.run_name, config=self.logging_dict
             )
+            
+            artifact = wandb.Artifact("python_scripts", type="file")
+            artifact.add_file(os.path.abspath(__file__))
+            artifact.add_file(board_state_functions.__file__)
+            wandb.log_artifact(artifact)
+            
 
         print("Probe initialized with config:\n", self.logging_dict)
 
@@ -222,7 +263,7 @@ class ProbeTrainer:
     ):
         print("Begining Training")
         iters = 0
-        best_acc = -999.0 
+        best_acc = -999.0
         for epoch in range(self.num_epochs):
             print(f"Epoch {epoch}")
             for batch_idx, (batch_residuals, batch_labels) in enumerate(
@@ -231,17 +272,21 @@ class ProbeTrainer:
                     batch_size=self.batch_size,
                     custom_board_state_function=self.probe_config.custom_board_state_function,
                     target_layer=self.probe_config.target_layer,
-                    model=self.probe_config.model,
+                    model=self.model,
                 )
             ):
-                
                 # lr = self.get_lr(batch_idx, self.max_iters, self.max_lr, self.min_lr)
                 # for param_group in self.optimizer.param_groups:
                 #     param_group["lr"] = lr
 
                 # use slice to downselect batch elements
-                batch_residuals = batch_residuals[:, self.pos_slice, :]
-                batch_labels = batch_labels[:, self.pos_slice, ...]
+                
+                if batch_idx > 1000:
+                    break #TODO
+                
+                pos_slice = self.probe_config.slicer
+                batch_residuals = batch_residuals[:, pos_slice, :]
+                batch_labels = batch_labels[:, pos_slice, ...]
 
                 # Forward pass using einsum
                 probe_output: torch.Tensor = einops.einsum(
@@ -262,16 +307,14 @@ class ProbeTrainer:
                 # Calculate loss
                 loss = self.criterion(probe_output, batch_labels)
 
-                
-                
                 # Backward and optimize
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-                
+
                 iters += self.batch_size
-                
-                if (batch_idx) % 50 == 0:
+
+                if (batch_idx+1) % 50 == 0:
                     self.scheduler.step()
                     accuracy = (
                         (probe_output.argmax(-1) == batch_labels.argmax(-1))
@@ -293,7 +336,7 @@ class ProbeTrainer:
 
                     checkpoint.update(self.logging_dict)
 
-                    if accuracy < best_acc:
+                    if accuracy > best_acc:
                         print("New best acc. Saving checkpoint")
                         torch.save(checkpoint, self.checkpoint_filename)
 
@@ -315,7 +358,7 @@ class ProbeTrainer:
                                 }
                             )
         # Training is finished. Log probe weights to WANDB
-        artifact = wandb.Artifact(self.run_name + "_model", type="model")
+        artifact = wandb.Artifact("linear_probe", type="model")
         artifact.add_file(self.checkpoint_filename)
         wandb.log_artifact(artifact)
         wandb.finish()
@@ -333,14 +376,14 @@ class ProbeTrainer:
 
         probe = torch.randn(
             # dimensions
-            cfg.model.cfg.d_model,
+            self.model.cfg.d_model,
             cfg.num_rows,
             cfg.num_cols,
             cfg.num_classes,
             # options
             requires_grad=False,
-            device=cfg.model.cfg.device,
-        ) / np.sqrt(cfg.model.cfg.d_model)
+            device=self.model.cfg.device,
+        ) / np.sqrt(self.model.cfg.d_model)
 
         probe.requires_grad = True
         return probe
@@ -358,7 +401,7 @@ def initialize_argparser():
     parser.add_argument(
         "--dataset_prefix",
         type=str,
-        choices=["lichess_", "stockfish_"],
+        choices=["lichess_",], #, "stockfish_"
         default="lichess_",
         help="Prefix of the dataset (Default: 'lichess_')",
     )
@@ -382,9 +425,9 @@ def initialize_argparser():
     parser.add_argument(
         "--split",
         type=str,
-        choices=[member.name for member in DataSetSplits],
+        choices=[member.name.lower() for member in DataSetSplits],
         default="train",
-        help=f"Optional. Dataset split. Choose from {[member.name for member in DataSetSplits]}) (Default: TRAIN)",
+        help=f"Optional. Dataset split. Choose from {[member.name.lower() for member in DataSetSplits]}) (Default: TRAIN)",
     )
 
     # Probe type
@@ -393,10 +436,9 @@ def initialize_argparser():
         type=str,
         choices=[member.name for member in ProbeType],
         default="color",
-        help=f"Optional. Type of probe. Choose from {[member.name for member in ProbeType]}) (Default: COLOR)",
+        help=f"Optional. Type of probe. Choose from {[member.name.lower() for member in ProbeType]}) (Default: COLOR)",
     )
 
-    # epocs
     parser.add_argument(
         "--epochs",
         type=int,
@@ -418,11 +460,11 @@ def initialize_argparser():
         default=None,
         help="Enter a range in the format start:stop:step",
     )
-    
+
     parser.add_argument(
         "--jobid",
         type=str,
-        default='',
+        default="",
         help="Job ID if called from SLURM",
     )
 

@@ -4,6 +4,7 @@ import pandas as pd
 from typing import List, Union, Iterable
 from transformer_lens import HookedTransformer
 from typing import Any, Callable, Tuple
+from board_state_functions import df_to_one_hot_tensor as df21hot
 
 def get_batches(
     full_df: pd.DataFrame,
@@ -44,7 +45,7 @@ def get_batches(
         residuals_clone.requires_grad_(True)
         
         # Get labels for each game in the batch
-        batch_labels = custom_board_state_function(batch_df)
+        batch_labels = df21hot(batch_df,custom_board_state_function)
         yield residuals_clone, batch_labels
         
         
