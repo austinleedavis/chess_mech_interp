@@ -16,20 +16,27 @@ import chess
 import torch
 
 
-def dupe_output(every_n_tokens: int = 2):
-    """
-    Decorator that duplicates the output of the decorated function N times. The decorated function that returns the output of the original function twice.
-    This is necessary because moves are represented by two tokens (not one). So the state does not need to be computed
-    """
+# def dupe_output(every_n_tokens: int = 2):
+#     """
+#     Decorator that duplicates the output of the decorated function N times. The decorated function that returns the output of the original function twice.
+#     This is necessary because moves are represented by two tokens (not one). So the state does not need to be computed
+#     """
 
-    def actual_dupe_output(func):
+#     def actual_dupe_output(func):
+#         def duplicate_output_wrapper(board):
+#             result = func(board)
+#             return (result,) * every_n_tokens
+
+#         return duplicate_output_wrapper
+
+#     return actual_dupe_output
+
+def actual_dupe_output(func, N_times):
         def duplicate_output_wrapper(board):
             result = func(board)
-            return (result,) * every_n_tokens
+            return (result,) * N_times
 
         return duplicate_output_wrapper
-
-    return actual_dupe_output
 
 
 def token_based(func):
@@ -39,7 +46,7 @@ def token_based(func):
     return func
 
 
-@dupe_output(2)
+
 def to_color(board: chess.Board):
     """
     Converts the chess board state into a single token color state representation.
@@ -66,7 +73,7 @@ def to_color(board: chess.Board):
     return single_token_state
 
 
-@dupe_output(2)
+
 def to_color_flipping(board: chess.Board):
     """
     Converts the chess board state into a single token color state,
@@ -101,7 +108,7 @@ def to_color_flipping(board: chess.Board):
     return single_token_state
 
 
-@dupe_output(2)
+
 def to_piece(board: chess.Board):
     """
     Converts the given chess board state into a one-hot vector representation of piece state.
@@ -138,7 +145,7 @@ def to_piece(board: chess.Board):
     return single_token_state
 
 
-@dupe_output(2)
+
 def to_piece_by_color(board: chess.Board):
     """
     Converts the chess board state into a one-hot vector representation of piece type and color for each tile on the grid.
@@ -190,7 +197,7 @@ def to_piece_by_color(board: chess.Board):
     return single_token_state
 
 
-@dupe_output(2)
+
 def to_my_controlled_tiles(board: chess.Board):
     """highlights tiles that are reachable (i.e., either being defended or attacked) by white"""
     attackers_list = []
@@ -205,7 +212,7 @@ def to_my_controlled_tiles(board: chess.Board):
     return attackers_list
 
 
-@dupe_output(2)
+
 def to_their_controlled_tiles(board: chess.Board):
     """highlights tiles that are reachable (i.e., either being defended or attacked) by white"""
     attackers_list = []
@@ -220,7 +227,7 @@ def to_their_controlled_tiles(board: chess.Board):
     return attackers_list
 
 
-@dupe_output(2)
+
 def to_black_controlled_tiles(board: chess.Board):
     """Reachable by"""
     attackers_list = []
@@ -232,7 +239,7 @@ def to_black_controlled_tiles(board: chess.Board):
     return attackers_list
 
 
-@dupe_output(2)
+
 def to_white_controlled_tiles(board: chess.Board):
     """highlights tiles that are reachable (i.e., either being defended or attacked) by white"""
     attackers_list = []
@@ -245,7 +252,7 @@ def to_white_controlled_tiles(board: chess.Board):
     return attackers_list
 
 
-@dupe_output(2)
+
 def to_black_controlled_tiles(board: chess.Board):
     """Reachable by"""
     attackers_list = []
@@ -277,12 +284,17 @@ def df_to_one_hot_tensor(
         for fen_str in row["fen_stack"]:
             board = chess.Board(fen_str)
             board_state_vector_list = state_mapper(board)  # len=n_classes
+            
             # ---------
             # state_mapper returns list or a tuple of lists.
             # append twice (extend) if state_mapper is move-based (tuple retun)
             # append once if state_mapper is token-based
             # ---------
-            _append_item_or_items(board_state_list, board_state_vector_list)
+            
+            # _append_item_or_items(board_state_list, board_state_vector_list)
+            board_state_list.append(board_state_vector_list)
+            board_state_list.append(board_state_vector_list)
+            
 
         state_lists.append(board_state_list)
 
