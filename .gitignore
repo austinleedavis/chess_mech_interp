@@ -3,6 +3,8 @@
 *.pth
 *.pt
 
+figure_*.html
+
 *scratchpad.py
 chess_data/
 mi_data/

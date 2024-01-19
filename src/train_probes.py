@@ -5,6 +5,7 @@ print(" ".join(sys.argv))
 
 
 import os
+import time
 import math
 import argparse
 
@@ -22,9 +23,15 @@ from enum import Enum
 import board_state_functions
 import pandas as pd
 import utils
+# for probe visuals
+import plotly.express as px
+import plotly.offline as pyo
 
 WANDB_LOG = True
-RELOAD_FROM_CHECKPOINT = False
+RELOAD_FROM_CHECKPOINT = True
+ALWAYS_SAVE_CHECKPOINT = True
+LOG_FREQ_IN_SAMPLES = 4000  # this is independent of batch size/epoch
+MAKE_PROBE_VISUALS = True
 
 @dataclass
 class ProbeConfig:
@@ -35,11 +42,9 @@ class ProbeConfig:
     target_layer: int = -1
     slicer: Any = field(default_factory=lambda: slice(None))
 
-
 class DataSetSplits(Enum):
     TRAIN = "train"
     TEST = "test"
-
 
 class ProbeType(Enum):
     COLOR_0, COLOR_1, COLOR_2, COLOR_3 = [
@@ -64,45 +69,69 @@ class ProbeType(Enum):
         ProbeConfig(
             7,  # one of: KQBRNP or 'empty'
             board_state_functions.to_piece,
-            slicer=slice(start,-1,2),
+            slicer=slice(start, -1, 2),
         )
         for start in range(2)
     ]
-    
+
     PIECE_BY_COLOR_0, PIECE_BY_COLOR_1 = [
         ProbeConfig(
             13,  # one of: KQBRNPkqbrnp or 'empty'
             board_state_functions.to_piece_by_color,
-            slicer=slice(start,-1,2),
+            slicer=slice(start, -1, 2),
         )
         for start in range(2)
     ]
-    
+
     MY_CONTROLLED_0, MY_CONTROLLED_1 = [
         ProbeConfig(
             64,  # one vector for each tile
             board_state_functions.to_my_controlled_tiles,
-            slicer=slice(start,-1,2),
+            slicer=slice(start, -1, 2),
         )
         for start in range(2)
     ]
-    
+
     THEIR_CONTROLLED_0, THEIR_CONTROLLED_1 = [
         ProbeConfig(
             64,  # one vector for each tile
             board_state_functions.to_my_controlled_tiles,
-            slicer=slice(start,-1,2),
+            slicer=slice(start, -1, 2),
         )
         for start in range(2)
     ]
-    
-    
+
     def from_str(probe_type: str):
         for enum_val in ProbeType:
             if enum_val.name == probe_type.upper():
                 return enum_val
         raise ValueError("No such probe type exists")
 
+def get_combined_html():
+    return """<!DOCTYPE html>
+<html>
+<head>
+    <title>Combined HTML</title>
+    <style>
+        .iframe-container {
+            display: flex;
+        }
+        .iframe-container iframe {
+            width: 50%;
+            height: 700px;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Figures</h1>
+    <div class="iframe-container">
+        <iframe src="figure_probe.html"></iframe>
+        <iframe src="figure_diff.html"></iframe>
+        <iframe src="figure_labels.html"></iframe>
+    </div>
+</body>
+</html>"""
 
 class ProbeTrainer:
     # Training parameters
@@ -127,7 +156,7 @@ class ProbeTrainer:
     scheduler: torch.optim.lr_scheduler.LRScheduler
     run_name: str
     probe_ext = ".pth"
-    probe_dir = "linear_probes/saved_probes/"
+    probe_dir = "linear_probes/saved_probes/" # this gets updated with probe name
     checkpoint_filename: str
 
     def __init__(self):
@@ -135,23 +164,20 @@ class ProbeTrainer:
         parser = initialize_argparser()
         args = parser.parse_args()
 
-
         self.num_epochs = args.epochs
         self.batch_size = args.batch_size
 
         # Setup the probe config
         self.probe_config = ProbeType.from_str(args.probe_type).value
-        
+
         if args.slice is not None:
             print("Range argument was given. Overriding default probe slice.")
             start, stop, step = args.slice
             self.probe_config.slicer = slice(start, stop, step)
-        
+
         MODEL_NAME = make_official()
         tokenizer = PreTrainedTokenizerFast.from_pretrained(MODEL_NAME)
-        self.model = HookedTransformer.from_pretrained(
-            MODEL_NAME, tokenizer=tokenizer
-        )
+        self.model = HookedTransformer.from_pretrained(MODEL_NAME, tokenizer=tokenizer)
         self.probe_config.target_layer = args.target_layer
 
         # Load dataset
@@ -164,17 +190,30 @@ class ProbeTrainer:
         self.max_iters = math.ceil(len(self.df) / self.batch_size) * self.num_epochs
 
         self.run_name = (
-            f"{self.probe_config.custom_board_state_function.__name__}"
-            f"{self.probe_config.slicer}"
-            f"layer_{self.probe_config.target_layer}_"
+            f"probe_L{self.probe_config.target_layer}_"
+            f"_B{self.batch_size}"
+            f"_{self.probe_config.slicer}"
+            f"_FN_{self.probe_config.custom_board_state_function.__name__}"
         )
+        
+        self.probe_dir += self.run_name + '/'
 
         # Initialize the linear probe tensor
         self.checkpoint_filename = self.probe_dir + self.run_name + self.probe_ext
         print("Probe will be saved to ", self.checkpoint_filename)
         if not os.path.exists(self.probe_dir):
-            os.makedirs(self.probe_dir,exist_ok=True)
-
+            os.makedirs(self.probe_dir, exist_ok=True)
+        
+        
+        if MAKE_PROBE_VISUALS:
+            with open(self.probe_dir+'figure_combined.html', "w") as file:
+                file.write(get_combined_html())
+        
+        if args.reload_filename != "":
+            self.reload_filename = args.reload_filename
+        else:
+            self.reload_filename = self.checkpoint_filename
+        
         self.linear_probe = self.initialize_probe_tensor(RELOAD_FROM_CHECKPOINT)
 
         # Loss and Optimizer
@@ -193,14 +232,14 @@ class ProbeTrainer:
 
         self.logging_dict = {
             # "linear_probe": self.linear_probe,
-            "probe_cfg_num_classes": self.probe_config.num_classes,
-            "probe_cfg_custom_board_state_function": self.probe_config.custom_board_state_function,
-            "probe_cfg_num_rows": self.probe_config.num_rows,
-            "probe_cfg_num_cols": self.probe_config.num_cols,
-            "probe_cfg_target_layer": self.probe_config.target_layer,
-            "probe_cfg_slicer_start": self.probe_config.slicer.start,
-            "probe_cfg_slicer_stop": self.probe_config.slicer.stop,
-            "probe_cfg_slicer_step": self.probe_config.slicer.step,
+            "num_classes": self.probe_config.num_classes,
+            "custom_board_state_function": self.probe_config.custom_board_state_function,
+            "num_rows": self.probe_config.num_rows,
+            "num_cols": self.probe_config.num_cols,
+            "target_layer": self.probe_config.target_layer,
+            "slicer_start": self.probe_config.slicer.start,
+            "slicer_stop": self.probe_config.slicer.stop,
+            "slicer_step": self.probe_config.slicer.step,
             "probe_type": args.probe_type,
             "batch_size": self.batch_size,
             "wd": self.wd,
@@ -221,24 +260,28 @@ class ProbeTrainer:
             "probe_ext": self.probe_ext,
             "probe_dir": self.probe_dir,
             "checkpoint_filename": self.checkpoint_filename,
+            "RELOAD_FROM_CHECKPOINT": RELOAD_FROM_CHECKPOINT,
+            "reload_filename": self.reload_filename,
             "lr": max(self.scheduler.get_last_lr()),
             "min_lr": self.min_lr,
             "max_lr": self.max_lr,
-            "RELOAD_FROM_CHECKPOINT": RELOAD_FROM_CHECKPOINT,
             "function_call": " ".join(sys.argv),
             "job_id": args.jobid,
         }
 
         if WANDB_LOG:
+            tags = None
+            if len(args.tags)>0:
+                tags = args.tags.split(',')
+        
             wandb.init(
-                project=wandb_project_name, name=self.run_name, config=self.logging_dict
+                project=wandb_project_name, name=self.run_name, config=self.logging_dict,tags=tags
             )
-            
+
             artifact = wandb.Artifact("python_scripts", type="file")
             artifact.add_file(os.path.abspath(__file__))
             artifact.add_file(board_state_functions.__file__)
             wandb.log_artifact(artifact)
-            
 
         print("Probe initialized with config:\n", self.logging_dict)
 
@@ -269,10 +312,13 @@ class ProbeTrainer:
         self,
     ):
         print("Begining Training")
-        iters = 0
+        last_logged_sample_index = 0
+        total_processed_samples = 0
         best_acc = -999.0
+        start_time = time.time()
         for epoch in range(self.num_epochs):
             print(f"Epoch {epoch}")
+
             for batch_idx, (batch_residuals, batch_labels) in enumerate(
                 utils.get_batches(
                     full_df=self.df,
@@ -287,13 +333,13 @@ class ProbeTrainer:
                 #     param_group["lr"] = lr
 
                 # use slice to downselect batch elements
-                
-                if batch_idx > 1000:
-                    break #TODO
-                
+
                 pos_slice = self.probe_config.slicer
                 batch_residuals = batch_residuals[:, pos_slice, :]
                 batch_labels = batch_labels[:, pos_slice, ...]
+
+                # print('batch_residuals.shape ',batch_residuals.shape)
+                # print('batch_labels.shape ',batch_labels.shape)
 
                 # Forward pass using einsum
                 probe_output: torch.Tensor = einops.einsum(
@@ -301,6 +347,8 @@ class ProbeTrainer:
                     self.linear_probe,
                     "batch pos d_model, d_model rows cols classes -> batch pos rows cols classes",
                 )
+
+                torch.clamp_(probe_output, 0.0, 1.0)
 
                 # residuals: torch.Size([batch, pos, 768])
                 # probe:    torch.Size([768, 8, 8, 3])
@@ -319,64 +367,85 @@ class ProbeTrainer:
                 loss.backward()
                 self.optimizer.step()
 
-                iters += self.batch_size
+                total_processed_samples += self.batch_size
+                samples_since_last_log = (
+                    total_processed_samples - last_logged_sample_index
+                )
 
-                if (batch_idx+1) % 50 == 0:
+                #-----------
+                # Log, Checkpoint, and create visuals
+                #-----------
+                if samples_since_last_log > LOG_FREQ_IN_SAMPLES:
+                    last_logged_sample_index = total_processed_samples
+                    end_time = time.time()
+                    runtime = end_time - start_time
+
                     self.scheduler.step()
+
                     accuracy = (
                         (probe_output.argmax(-1) == batch_labels.argmax(-1))
                         .float()
                         .mean()
                     )
 
-                    checkpoint = {
-                        "acc": accuracy,
-                        "loss": loss,
-                        "lr": max(self.scheduler.get_last_lr()),
-                        "epoch": epoch,
-                        "batch": batch_idx,
-                        "linear_probe": self.linear_probe,
-                        "batch": batch_idx,
-                        "epoch": epoch,
-                        "iter": iters,
-                    }
-
-                    checkpoint.update(self.logging_dict)
-
-                    if accuracy > best_acc:
-                        print("New best acc. Saving checkpoint")
-                        torch.save(checkpoint, self.checkpoint_filename)
-
-                    if epoch % 1 == 0:
-                        print(
-                            f"Epoch [{epoch + 1}/{self.num_epochs}], Batch: {batch_idx} Loss: {loss.item():.4f} Acc: {accuracy} Lr: {max(self.scheduler.get_last_lr())}"
+                    print(
+                        f"Runtime {(runtime / 60.):.2f} Epoch [{epoch + 1}/{self.num_epochs}], Batch: {batch_idx} Iter: {total_processed_samples} Loss: {loss.item():.4f} Acc: {accuracy:.6f} Lr: {max(self.scheduler.get_last_lr()):.6f}"
+                    )
+                    
+                    if WANDB_LOG:
+                        wandb.log(
+                            {
+                                "acc": accuracy,
+                                "loss": loss,
+                                "lr": max(
+                                    self.scheduler.get_last_lr()
+                                ),  # self.scheduler.get_last_lr()[0],
+                                "epoch": epoch,
+                                "batch": batch_idx,
+                                "samples": total_processed_samples,
+                            }
                         )
-                        if WANDB_LOG:
-                            wandb.log(
-                                {
-                                    "acc": accuracy,
-                                    "loss": loss,
-                                    "lr": max(
-                                        self.scheduler.get_last_lr()
-                                    ),  # self.scheduler.get_last_lr()[0],
-                                    "epoch": epoch,
-                                    "batch": batch_idx,
-                                    "iter": iters,
-                                }
-                            )
-        # Training is finished. Log probe weights to WANDB
-        artifact = wandb.Artifact("linear_probe", type="model")
-        artifact.add_file(self.checkpoint_filename)
-        wandb.log_artifact(artifact)
-        wandb.finish()
+
+                    # save checkpoint file
+                    if ALWAYS_SAVE_CHECKPOINT or (accuracy > best_acc):
+                        checkpoint = {
+                            "acc": accuracy,
+                            "loss": loss,
+                            "lr": max(self.scheduler.get_last_lr()),
+                            "epoch": epoch,
+                            "batch": batch_idx,
+                            "linear_probe": self.linear_probe,
+                            "batch": batch_idx,
+                            "epoch": epoch,
+                            "iter": total_processed_samples,
+                        }
+                        checkpoint.update(self.logging_dict)
+
+                        print("Saving checkpoint: ", self.checkpoint_filename)
+                        torch.save(checkpoint, self.checkpoint_filename)
+                        
+                        if MAKE_PROBE_VISUALS:
+                            
+                            make_visuals(batch_labels[-1],'Labels', self.probe_dir+'figure_labels.html')
+                            make_visuals(probe_output[-1],'Probe output', self.probe_dir+'figure_probe.html')
+                            diff = probe_output[-1,...].detach().cpu()-batch_labels[-1,...].detach().cpu()
+                            make_visuals(diff,'Diff (output - labels)', self.probe_dir+'figure_diff.html',range_color=[-1, 1])
+                            
+                            
+                    
+        
+        print("Training Complete")
+                        
+        
+            
 
     def initialize_probe_tensor(self, reload_checkpoint=True) -> torch.Tensor:
-        if reload_checkpoint and os.path.exists(self.checkpoint_filename):
-            probe: torch.Tensor = torch.load(self.checkpoint_filename)["linear_probe"]
+        if reload_checkpoint and os.path.exists(self.reload_filename):
+            probe: torch.Tensor = torch.load(self.reload_filename)["linear_probe"]
             probe.cuda()
             probe.requires_grad = True
 
-            print(f"Reloaded from checkpoint:\b    {self.checkpoint_filename}")
+            print(f"Reloaded from checkpoint:\b    {self.reload_filename}")
             return probe
 
         cfg = self.probe_config
@@ -408,7 +477,9 @@ def initialize_argparser():
     parser.add_argument(
         "--dataset_prefix",
         type=str,
-        choices=["lichess_",], #, "stockfish_"
+        choices=[
+            "lichess_",
+        ],  # , "stockfish_"
         default="lichess_",
         help="Prefix of the dataset (Default: 'lichess_')",
     )
@@ -442,7 +513,7 @@ def initialize_argparser():
         "--probe_type",
         type=str,
         choices=[member.name for member in ProbeType],
-        default="color",
+        default=list(ProbeType)[0].name,
         help=f"Optional. Type of probe. Choose from {[member.name.lower() for member in ProbeType]}) (Default: COLOR)",
     )
 
@@ -474,10 +545,50 @@ def initialize_argparser():
         default="",
         help="Job ID if called from SLURM",
     )
+    
+    parser.add_argument(
+        "--reload_filename",
+        type=str,
+        default="",
+        help="(Optional) Relative path to reload checkpoint"
+    )
+    
+    parser.add_argument(
+        "--tags",
+        type=str,
+        default="",
+        help="Comma-separated list of tags to add to wandb"
+    )
 
     return parser
 
 
+def make_visuals(tensor, title, filename, range_color=None):
+    positions = tensor.shape[0]
+    tensor = tensor.permute(0,3,1,2)
+    flat_tens = tensor.reshape(positions,-1,8)
+    figure = px.imshow(flat_tens.detach().cpu(), animation_frame = 0, title = title, range_color=range_color, aspect = 'auto')
+    
+    return pyo.plot(figure, filename=filename)
+
+
+
 if __name__ == "__main__":
     pt = ProbeTrainer()
-    pt.train()
+    try:
+        pt.train()
+    except KeyboardInterrupt as e:
+        if WANDB_LOG:
+            wandb.finish(-1)
+        raise e
+    except Exception as e:
+        if WANDB_LOG:
+            wandb.finish(-2)
+        raise e
+    finally:
+        # Training is finished. Log probe weights to WANDB if enabled
+        if WANDB_LOG:
+            artifact = wandb.Artifact("linear_probe", type="model")
+            artifact.add_file(pt.checkpoint_filename)
+            wandb.log_artifact(artifact)
+            

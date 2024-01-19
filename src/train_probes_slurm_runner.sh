@@ -8,6 +8,7 @@
 
 #!/bin/bash
 
-for file in slurm/train_probes_types/train-probe-*; do
+for file in slurm/18Jan_colors/scripts/train-probe-*; do
+   # echo $file
    sbatch $file
 done

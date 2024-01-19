@@ -1,23 +1,22 @@
 """Creates a single slurm to process each chunk of the dataset so these can be run in parallel on the compute clusters"""
 import os
 
-def get_slurm_script_string(
-    DIR,
-    LAYER,
-    EPOCHS,
-    BATCH_SIZE,
-    PROBE_TYPE,
-):
-    script = (
-f"""#!/bin/bash
+
+def get_python_line(LAYER, EPOCHS, PROBE_TYPE, BATCH_SIZE):
+    return f"""python src/train_probes.py --target_layer {LAYER} --epochs {EPOCHS} --probe_type {PROBE_TYPE} --batch_size {BATCH_SIZE} --jobid "$SLURM_JOBID"
+
+"""
+
+
+def get_preamble(SLURM_JOB_NAME, DIR, SCRIPT_BATCH_NAME, LAYER, PROBE_TYPE):
+    return f"""#!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --gpus=1
 #SBATCH --mem=100G
-#SBATCH --constraint=h100
-#SBATCH --time=1:30:00
-#SBATCH --job-name=Probe{LAYER:02}
-#SBATCH --error={DIR}/logs/err-{LAYER:02}-%J.err
-#SBATCH --output={DIR}/logs/out-{LAYER:02}-%J.out
+#SBATCH --time=7:00:00
+#SBATCH --job-name={SLURM_JOB_NAME}
+#SBATCH --error={LOG_DIR}/err-{LAYER:02}-{PROBE_TYPE}-%J.err
+#SBATCH --output={LOG_DIR}/out-{LAYER:02}-{PROBE_TYPE}-%J.out
 
 module load anaconda/anaconda3
 source /apps/anaconda/anaconda3/etc/profile.d/conda.sh
@@ -28,42 +27,56 @@ hostname
 pwd
 nvidia-smi
 
-python src/train_probes.py --target_layer {LAYER} --epochs {EPOCHS} --probe_type {PROBE_TYPE} --batch_size {BATCH_SIZE} --jobid "$SLURM_JOBID"
+
+"""
 
 
-""")
-    return script
+### -----------------------
+# SCRIPT STARTS HERE
+### -----------------------
 
-DIR = "slurm/train_probes_types/"
+SCRIPT_BATCH_NAME = "18Jan_colors"
+DIR = f"slurm/{SCRIPT_BATCH_NAME}"
+SCRIPT_DIR = DIR + "/scripts"
+LOG_DIR = DIR + "/logs"
+BATCH_SIZE = 50
 
 # Create all subfolders up to and including logs/
-if not os.path.exists(DIR+'/logs'):
-    os.makedirs(DIR+'/logs')
+if not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR)
+
+if not os.path.exists(SCRIPT_DIR):
+    os.makedirs(SCRIPT_DIR)
 
 slurm_files = []
+
 for probe_type in [
+    "COLOR_0",
+    "COLOR_1",
+    "COLOR_2",
+    "COLOR_3",
     "PIECE_ANY_0",
     "PIECE_ANY_1",
     "PIECE_BY_COLOR_0",
     "PIECE_BY_COLOR_1",
     "MY_CONTROLLED_0",
     "MY_CONTROLLED_1",
-    ]:
-    for layer in range(12):
-        script = get_slurm_script_string(
-            DIR,
-            layer,
-            EPOCHS:=3,
-            BATCH_SIZE=200,
-            PROBE_TYPE=probe_type)
-            
-        filename = DIR+f'train-probe-{layer:03}-type-{probe_type}.slurm'
-        
-        slurm_files.append(filename)
-        
-        with open(filename, 'w') as file:
-            file.write(script)
-    
+]:
+    filename = SCRIPT_DIR + f"/train-{probe_type}-all-layers-{BATCH_SIZE}.slurm"
+
+    preamble = get_preamble(
+        SCRIPT_BATCH_NAME, probe_type, EPOCHS := 3, BATCH_SIZE, PROBE_TYPE=probe_type
+    )
+
+    script = preamble
+
+    for layer in range(11, -1, -1):
+        script += get_python_line(layer, EPOCHS, probe_type, BATCH_SIZE)
+
+        # slurm_files.append(filename)
+
+    with open(filename, "w") as file:
+        file.write(script)
 
 
 """
@@ -87,7 +100,7 @@ options:
   --slice SLICE         Enter a range in the format start:stop:step
   --jobid JOBID         Job ID if called from SLURM
   """
-  
+
 
 "PIECE_ANY_0",
 "PIECE_ANY_1",
@@ -95,3 +108,5 @@ options:
 "PIECE_BY_COLOR_1",
 "MY_CONTROLLED_0",
 "MY_CONTROLLED_1",
+
+# S----BATCH --constraint=v100
