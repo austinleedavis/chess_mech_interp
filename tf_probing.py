@@ -82,7 +82,7 @@ def _board_to_piece_and_color_state(board: chess.Board):
     return state.reshape(8, 8)
 
 def seq_to_state_stack(game_fen_stack):
-    state_stack = np.stack([_board_to_color_state(chess.Board(move_state)) for move_state in game_fen_stack])
+    state_stack = np.stack([_board_to_piece_and_color_state(chess.Board(move_state)) for move_state in game_fen_stack])
     # need repeat_interleave because moves require two tokens.
     # and the state of the board does not change in between these tokens
     state_stack_repeated = np.repeat(state_stack,2,axis=0)
@@ -117,8 +117,8 @@ output_dir = "linear_probes/"
 log_frequency = 1
 checkpoint_frequency = 1
 # The first mode is blank or not, the second mode is next or prev GIVEN that it is not blank
-modes = 3 # blank vs mine/yours
-options = 2 # mine vs not mine
+modes = 3 # negation | mine | theirs
+options = int(np.ceil(len(torch.unique(state_stack[0,0]))/2)) # number of thing types (e.g., [0,1] for color)
 
 # %%
 
@@ -126,11 +126,11 @@ options = 2 # mine vs not mine
 for arg in vars(config):
     globals()[arg] = getattr(config, arg)
 
+config.update({"JobID":os.getenv("SLURM_JOB_ID")})
 
 run = wandb.init(
                 project="chess_world", 
-                config=config,
-                notes = f'SLURM Job ID:{os.getenv("SLURM_JOB_ID")}',
+                config=vars(config),
                 save_code=True,
             )
 
@@ -156,6 +156,7 @@ probe_filename = os.path.join(output_dir, probe_name) + ".pth"
 # state_stack_iters = list(sequence_generator(options))
 # alternating = torch.tensor([1 if i%2 == 0 else -1 for i in range(length)], device="cuda")
 
+### BELOW WORKS FOR PIECE TYPE
 def state_stack_to_one_hot(state_stack):
     one_hot = torch.zeros(
         modes, # blank vs mine vs theirs
@@ -167,35 +168,80 @@ def state_stack_to_one_hot(state_stack):
         device=state_stack.device,
         dtype=torch.int,
     )
-    
-    # blanks mode is either piece or not piece (e.g., pawn or not pawn) regardless of move
-    one_hot[0, ..., 0] = state_stack == 0
-    one_hot[0, ..., 1] = 1 - one_hot[0, ..., 0]
-
     # Mine mode is either my piece or not my piece
     # have to run this for each piece type
     # use 4-stroke cycle
-    for i in range(1,options//2+1):
-        # Mine mode
-        one_hot[1, :, 0::4, :, :, 0] = (state_stack == i)[:, 0::4]
-        one_hot[1, :, 1::4, :, :, 0] = (state_stack == i)[:, 1::4]
-        one_hot[1, :, 2::4, :, :, 0] = (state_stack == -i)[:, 2::4]
-        one_hot[1, :, 3::4, :, :, 0] = (state_stack == -i)[:, 3::4]
-        one_hot[1, ..., 1] = 1 - one_hot[i, ..., 0] # fill NOT case by what's already there
-        # Theirs mode
-        one_hot[2, :, 0::4, :, :, 0] = (state_stack == -i)[:, 0::4]
-        one_hot[2, :, 1::4, :, :, 0] = (state_stack == -i)[:, 1::4]
-        one_hot[2, :, 2::4, :, :, 0] = (state_stack == i)[:, 2::4]
-        one_hot[2, :, 3::4, :, :, 0] = (state_stack == i)[:, 3::4]
-        one_hot[2, ..., 1] = 1 - one_hot[i, ..., 0] # fill NOT case by what's already there
+    for i in range(1,options):
+        #blank is same over all turns
+        one_hot[0, ..., i] = ~((state_stack == i) + (state_stack == -i))
+        
+        one_hot[1, :, 0::4, :, :, i] = ~(state_stack != i)[:, 0::4]
+        one_hot[1, :, 1::4, :, :, i] = ~(state_stack != i)[:, 1::4]
+        one_hot[1, :, 2::4, :, :, i] = ~(state_stack != -i)[:, 2::4]
+        one_hot[1, :, 3::4, :, :, i] = ~(state_stack != -i)[:, 3::4]
+        
+        one_hot[2, :, 0::4, :, :, i] = ~(state_stack != -i)[:, 0::4]
+        one_hot[2, :, 1::4, :, :, i] = ~(state_stack != -i)[:, 1::4]
+        one_hot[2, :, 2::4, :, :, i] = ~(state_stack != i)[:, 2::4]
+        one_hot[2, :, 3::4, :, :, i] = ~(state_stack != i)[:, 3::4]
+        
+    
+    one_hot[0, ..., 0] = (state_stack == 0)
+        
+    one_hot[1, :, 0::4, :, :, 0] = (state_stack > 0)[:, 0::4]
+    one_hot[2, :, 0::4, :, :, 0] = (state_stack < 0)[:, 0::4]
+    one_hot[1, :, 1::4, :, :, 0] = (state_stack > 0)[:, 1::4]
+    one_hot[2, :, 1::4, :, :, 0] = (state_stack < 0)[:, 1::4]
+    
+    one_hot[1, :, 2::4, :, :, 0] = (state_stack < 0)[:, 2::4]
+    one_hot[2, :, 2::4, :, :, 0] = (state_stack > 0)[:, 2::4]
+    one_hot[1, :, 3::4, :, :, 0] = (state_stack < 0)[:, 3::4]
+    one_hot[2, :, 3::4, :, :, 0] = (state_stack > 0)[:, 3::4]
+    
+    return one_hot
+
+def state_stack_to_one_hot(state_stack):
+    one_hot = torch.zeros(
+        modes, # blank vs mine vs theirs
+        state_stack.shape[0],
+        state_stack.shape[1],
+        8, # rows
+        8, # cols
+        options, # the N options (piece/empty OR empty/pawn/knight/rook/...)
+        device=state_stack.device,
+        dtype=torch.int,
+    )
+    """This method works beautifully for piecetypes.
+    """
+    
+    
+    # Mine mode is either my piece or not my piece
+    # have to run this for each piece type
+    # use 4-stroke cycle
+    for i in range(options):
+        
+        one_hot[1, :, 0::4, :, :, i] = ~(state_stack != i)[:, 0::4]
+        one_hot[1, :, 1::4, :, :, i] = ~(state_stack != i)[:, 1::4]
+        one_hot[1, :, 2::4, :, :, i] = ~(state_stack != -i)[:, 2::4]
+        one_hot[1, :, 3::4, :, :, i] = ~(state_stack != -i)[:, 3::4]
+        
+        one_hot[2, :, 0::4, :, :, i] = ~(state_stack != -i)[:, 0::4]
+        one_hot[2, :, 1::4, :, :, i] = ~(state_stack != -i)[:, 1::4]
+        one_hot[2, :, 2::4, :, :, i] = ~(state_stack != i)[:, 2::4]
+        one_hot[2, :, 3::4, :, :, i] = ~(state_stack != i)[:, 3::4]
+        
+        one_hot[0, ..., i] = ~((one_hot[1,...,i]==1) + (one_hot[2,...,i]==1))
     return one_hot
 
 state_stack_one_hot = state_stack_to_one_hot(state_stack)
 print(state_stack_one_hot.shape) #torch.Size([13, 50, 125, 8, 8, 13])
-print(state_stack_one_hot[1,0,8:10:2,...,0]) #my mode, my pieces
-print(state_stack_one_hot[1,0,8:10:2,...,1]) #my mode, not my pieces
-print(state_stack_one_hot[2,0,8:10:2,...,0]) #theirs mode, their pieces
-print(state_stack_one_hot[2,0,8:10:2,...,1]) #theirs mode, not their pieces
+for i in range(options): print(state_stack_one_hot[0,0,0,...,i])
+for i in range(options): print(state_stack_one_hot[1,0,0,...,i])
+for i in range(options): print(state_stack_one_hot[2,0,0,...,i])
+# print(state_stack_one_hot[1,0,8:10:2,...,0]) #my mode, my thing
+# print(state_stack_one_hot[1,0,8:10:2,...,1]) #my mode, not my thing
+# print(state_stack_one_hot[2,0,8:10:2,...,0]) #theirs mode, their thing
+# print(state_stack_one_hot[2,0,8:10:2,...,1]) #theirs mode, not their thing
 
 
 #%%
@@ -230,7 +276,6 @@ for epoch in range(num_epochs):
             resid_post,
             linear_probe,
         )
-
         probe_log_probs = probe_out.log_softmax(-1)
         probe_correct_log_probs = einops.reduce( 
             probe_log_probs * state_stack_one_hot,

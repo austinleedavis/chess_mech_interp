@@ -29,10 +29,12 @@ def get_args():
                         help='Number of games')
     parser.add_argument('--resume', action='store_true', 
                         help='Flag to resume training')
-    parser.add_argument('--log_frequency', type=int, default=100,
+    parser.add_argument('--log_frequency', type=int, default=50,
                         help='Number of batches between logs')
-    parser.add_argument('--checkpoint_frequency', type=int, default=100,
+    parser.add_argument('--checkpoint_frequency', type=int, default=50,
                         help='Number of batches between logs')
+    parser.add_argument('--notes', type=str, default=None,
+                        help='Any notes that should be added to the run')
     
     #TODO add mode/options arguments
 
@@ -41,7 +43,7 @@ def get_args():
 
 if __name__ == '__main__':
     args = get_args()
-
+    print(vars(args))
     # Add all argparse arguments to the global context
     for arg in vars(args):
         globals()[arg] = getattr(args, arg)
