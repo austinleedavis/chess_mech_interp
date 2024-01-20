@@ -18,7 +18,7 @@ PIECE_TO_INT = {
 
 def DEPRECATED(func):
     def wrapper(*args, **kwargs):
-        print("DEPRECATED")
+        print(f"{func.__name__} is DEPRECATED")
         return func(*args, **kwargs)
     return wrapper
 
@@ -149,6 +149,7 @@ def create_state_stack(
 
     for move in fen_stack:
         board_state = custom_board_to_state_fn(chess.Board(move),skill)
+        initial_states.append(board_state)
         initial_states.append(board_state)
 
     return np.array(initial_states)
