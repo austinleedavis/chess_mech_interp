@@ -83,12 +83,15 @@ config = vars(argparse_args)
 for arg in config:
     globals()[arg] = getattr(config, arg)
 
+notes = config.notes
+config.pop('notes')
 
 config.update({"JobID":os.getenv("SLURM_JOB_ID")}) # do this after pushing global vars
 run = wandb.init(
                 project="chess_world", 
                 config=config,
                 save_code=True,
+                notes = notes,
             )
 
 if probe_name == '': probe_name = run.name #overwrite default name if it's missing
