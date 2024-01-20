@@ -2,6 +2,7 @@
 from src.train_argparse import get_args
 config = get_args()
 
+#%%
 import os
 import chess
 import einops
@@ -88,10 +89,11 @@ def seq_to_state_stack(game_fen_stack):
     return state_stack_repeated[:-1] # copied one extra token's worth of state. drop it
     
 
-# state_stack = torch.tensor(
-#     np.stack([seq_to_state_stack(seq) for seq in board_seqs_string[:50]]) # NOTE: original used strings here
-# )
-# print(state_stack.shape) # [num_games, pos, row, col]
+state_stack = torch.tensor(
+    np.stack([seq_to_state_stack(seq) for seq in board_seqs_string[:50]]) # NOTE: original used strings here
+)
+print(state_stack.shape) # [num_games, pos, row, col]
+print(state_stack[0,0])
 
 # %%
 # -------------
@@ -115,8 +117,8 @@ output_dir = "linear_probes/"
 log_frequency = 1
 checkpoint_frequency = 1
 # The first mode is blank or not, the second mode is next or prev GIVEN that it is not blank
-modes = 3 # blank vs color (mode)
-options = 3 # the three options
+modes = 3 # blank vs mine/yours
+options = 2 # mine vs not mine
 
 # %%
 
@@ -124,7 +126,7 @@ options = 3 # the three options
 for arg in vars(config):
     globals()[arg] = getattr(config, arg)
 
-# %%
+
 run = wandb.init(
                 project="chess_world", 
                 config=config,
@@ -136,7 +138,6 @@ if probe_name == '': probe_name = run.name #overwrite default name if it's missi
 
 print("Training initialized with the following configuration:\n",run.config)
 
-
 if not os.path.exists(output_dir):
     os.makedirs(output_dir, exist_ok = True)
 
@@ -145,27 +146,57 @@ probe_filename = os.path.join(output_dir, probe_name) + ".pth"
 
 # %%
 
+# if options is not odd, must fix the state_stack_to_one_hot method!
+# assert options % 2 == 1
+# def sequence_generator(n):
+#     for i in range(n):
+#         yield (i + 1) // 2 * (-1) ** i
+
+# # Example usage
+# state_stack_iters = list(sequence_generator(options))
+# alternating = torch.tensor([1 if i%2 == 0 else -1 for i in range(length)], device="cuda")
+
 def state_stack_to_one_hot(state_stack):
     one_hot = torch.zeros(
-        modes, # blank vs color (mode)
-        state_stack.shape[0], # num games
-        state_stack.shape[1], # num moves
-        rows, # rows
-        cols, # cols
-        options, # the two options
+        modes, # blank vs mine vs theirs
+        state_stack.shape[0],
+        state_stack.shape[1],
+        8, # rows
+        8, # cols
+        options, # the N options (piece/empty OR empty/pawn/knight/rook/...)
         device=state_stack.device,
         dtype=torch.int,
     )
-    one_hot[:, ..., 0] = state_stack == 0
-    one_hot[:, ..., 1] = state_stack == -1
-    one_hot[:, ..., 2] = state_stack == 1
     
+    # blanks mode is either piece or not piece (e.g., pawn or not pawn) regardless of move
+    one_hot[0, ..., 0] = state_stack == 0
+    one_hot[0, ..., 1] = 1 - one_hot[0, ..., 0]
+
+    # Mine mode is either my piece or not my piece
+    # have to run this for each piece type
+    # use 4-stroke cycle
+    for i in range(1,options//2+1):
+        # Mine mode
+        one_hot[1, :, 0::4, :, :, 0] = (state_stack == i)[:, 0::4]
+        one_hot[1, :, 1::4, :, :, 0] = (state_stack == i)[:, 1::4]
+        one_hot[1, :, 2::4, :, :, 0] = (state_stack == -i)[:, 2::4]
+        one_hot[1, :, 3::4, :, :, 0] = (state_stack == -i)[:, 3::4]
+        one_hot[1, ..., 1] = 1 - one_hot[i, ..., 0] # fill NOT case by what's already there
+        # Theirs mode
+        one_hot[2, :, 0::4, :, :, 0] = (state_stack == -i)[:, 0::4]
+        one_hot[2, :, 1::4, :, :, 0] = (state_stack == -i)[:, 1::4]
+        one_hot[2, :, 2::4, :, :, 0] = (state_stack == i)[:, 2::4]
+        one_hot[2, :, 3::4, :, :, 0] = (state_stack == i)[:, 3::4]
+        one_hot[2, ..., 1] = 1 - one_hot[i, ..., 0] # fill NOT case by what's already there
     return one_hot
 
-# state_stack_one_hot = state_stack_to_one_hot(state_stack)
-# print(state_stack_one_hot.shape)
-# print((state_stack_one_hot[:, 0, 17, 4:9, 2:5]))
-# print((state_stack[0, 17, 4:9, 2:5]))
+state_stack_one_hot = state_stack_to_one_hot(state_stack)
+print(state_stack_one_hot.shape) #torch.Size([13, 50, 125, 8, 8, 13])
+print(state_stack_one_hot[1,0,8:10:2,...,0]) #my mode, my pieces
+print(state_stack_one_hot[1,0,8:10:2,...,1]) #my mode, not my pieces
+print(state_stack_one_hot[2,0,8:10:2,...,0]) #theirs mode, their pieces
+print(state_stack_one_hot[2,0,8:10:2,...,1]) #theirs mode, not their pieces
+
 
 #%%
 
@@ -199,22 +230,25 @@ for epoch in range(num_epochs):
             resid_post,
             linear_probe,
         )
-        # print(probe_out.shape)
-
-        acc_blank = (probe_out[0].argmax(-1) == state_stack_one_hot[0].argmax(-1)).float().mean()
-        acc_color = ((probe_out[1].argmax(-1) == state_stack_one_hot[1].argmax(-1)) * state_stack_one_hot[1].sum(-1)).float().sum()/(state_stack_one_hot[1]).float().sum()
 
         probe_log_probs = probe_out.log_softmax(-1)
-        probe_correct_log_probs = einops.reduce(
+        probe_correct_log_probs = einops.reduce( 
             probe_log_probs * state_stack_one_hot,
             "modes batch pos rows cols options -> modes pos rows cols",
             "mean"
         ) * options # Multiply to correct for the mean over options
-        loss_even = -probe_correct_log_probs[0, 0::2].mean(0).sum() # note that "even" means odd in the game framing, since we offset by 5 moves lol
-        loss_odd = -probe_correct_log_probs[1, 1::2].mean(0).sum()
-        loss_all = -probe_correct_log_probs[2, :].mean(0).sum()
         
-        loss = loss_even + loss_odd + loss_all
+        
+        loss = -sum((
+                # error for empty mode
+                probe_correct_log_probs[0, :].mean(0).sum(),
+                # error for mine mode
+                probe_correct_log_probs[1, 0::4].mean(0).sum(),
+                probe_correct_log_probs[1, 1::4].mean(0).sum(),
+                # error for theirs mode
+                probe_correct_log_probs[2, 0::2].mean(0).sum(),
+                probe_correct_log_probs[2, 0::2].mean(0).sum(),
+            ))
         
         
         loss.backward() # it's important to do a single backward pass for mysterious PyTorch reasons, so we add up the losses - it's per mode and per square.
@@ -222,14 +256,28 @@ for epoch in range(num_epochs):
         
         #logging
         if batch % log_frequency == 0:
-            logging_dict = {
-            'epoch':epoch,
             
-            'sample':sample,
-            'acc_blank':acc_blank,
-            'acc_color':acc_color,
-            'loss':loss
-            }
+            acc_blank = (probe_out[0].argmax(-1) == state_stack_one_hot[0].argmax(-1)).float().mean()
+            
+            acc_mine = (
+                (probe_out[1].argmax(-1) == state_stack_one_hot[1].argmax(-1))
+                * state_stack_one_hot[1].sum(-1)
+                ).float().sum() / (state_stack_one_hot[1]).float().sum()
+            
+            acc_theirs = (
+                (probe_out[2].argmax(-1) == state_stack_one_hot[2].argmax(-1)) # compare preds
+                * state_stack_one_hot[2].sum(-1) #
+                ).float().sum() / (state_stack_one_hot[2]).float().sum()
+            
+            logging_dict = {
+                'epoch': epoch,
+                'batch': batch,
+                'sample': sample,
+                'acc_blank': acc_blank,
+                'acc_mine': acc_mine,
+                'acc_theirs': acc_theirs,
+                'loss': loss
+                }
             
             wandb.log(logging_dict)
             print(logging_dict)
@@ -244,13 +292,13 @@ for epoch in range(num_epochs):
 torch.save(linear_probe, probe_filename)
 
 logging_dict = {
-            'epoch':epoch,
-            
-            'sample':i,
-            'acc_blank':acc_blank,
-            'acc_color':acc_color,
-            'loss':loss
-            }
+    'epoch': epoch,
+    'batch': batch,
+    'sample': sample,
+    'acc_mine': acc_mine,
+    'acc_theirs': acc_theirs,
+    'loss': loss
+    }
             
 wandb.log(logging_dict)
 wandb.log_model(probe_filename, name = probe_name)
