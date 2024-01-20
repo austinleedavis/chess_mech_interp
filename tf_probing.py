@@ -175,12 +175,13 @@ linear_probe = torch.randn(
 )/np.sqrt(model.cfg.d_model)
 linear_probe.requires_grad = True
 optimiser = torch.optim.AdamW([linear_probe], lr=lr, betas=(0.9, 0.99), weight_decay=wd)
-
+batch = 0
+sample = 0
 for epoch in range(num_epochs):
     full_train_indices = torch.randperm(num_games)
-    batch = 0
     for i in tqdm(range(0, num_games, batch_size)):
         batch += 1
+        sample += i
         indices = full_train_indices[i:i+batch_size]
         games_int = board_seqs_int[indices]
         games_str = board_seqs_string[indices]
@@ -224,7 +225,7 @@ for epoch in range(num_epochs):
             logging_dict = {
             'epoch':epoch,
             
-            'sample':i,
+            'sample':sample,
             'acc_blank':acc_blank,
             'acc_color':acc_color,
             'loss':loss
