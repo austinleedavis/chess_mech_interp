@@ -1,18 +1,24 @@
 #%%
+from src.train_argparse import get_args
+config = get_args()
+
 import os
 import chess
 import einops
 import torch
 from tqdm import tqdm
 import numpy as np
+import pandas as pd
 from fancy_einsum import einsum
 import wandb
 from transformer_lens import HookedTransformer
 from transformers import PreTrainedTokenizerFast
 from src.mech_interp.fixTL import make_official
-from src.train_argparse import get_args
 
+def tqdm(x):
+    return x
 
+print("Loading Model")
 model_name = make_official()
 
 tokenizer:PreTrainedTokenizerFast = PreTrainedTokenizerFast.from_pretrained(model_name)
@@ -22,9 +28,9 @@ cfg = model.cfg
 
 #%%
 # Load data
-import pandas as pd
 
-#loading dataset with 126 chars each
+print("Loading Dataset")
+#loading dataset with 126 chars each (129,798 games)
 dataset = pd.read_pickle('chess_data/lichess_train.pkl') 
 board_seqs_int = torch.tensor(dataset['input_ids'].tolist()).long()
 board_seqs_string = np.stack(dataset['fen_stack'].tolist())
@@ -82,12 +88,17 @@ def seq_to_state_stack(game_fen_stack):
     return state_stack_repeated[:-1] # copied one extra token's worth of state. drop it
     
 
-state_stack = torch.tensor(
-    np.stack([seq_to_state_stack(seq) for seq in board_seqs_string[:50]]) # NOTE: original used strings here
-)
-print(state_stack.shape) # [num_games, pos, row, col]
+# state_stack = torch.tensor(
+#     np.stack([seq_to_state_stack(seq) for seq in board_seqs_string[:50]]) # NOTE: original used strings here
+# )
+# print(state_stack.shape) # [num_games, pos, row, col]
 
 # %%
+# -------------
+# Parameter Placeholders
+# -------------
+# Note: All parameters below are overridden by the configurator.
+#       They remain here to allow linting to work properly.
 layer = 6
 batch_size = 30
 lr = 1e-4
@@ -107,8 +118,32 @@ checkpoint_frequency = 1
 modes = 3 # blank vs color (mode)
 options = 3 # the three options
 
-# NOTE: the following `alternating` is not used
-# alternating = torch.tensor([1 if i%2 == 0 else -1 for i in range(length)], device="cuda")
+# %%
+
+# Add all argparse arguments to the global context
+for arg in vars(config):
+    globals()[arg] = getattr(config, arg)
+
+# %%
+run = wandb.init(
+                project="chess_world", 
+                config=config,
+                notes = f'SLURM Job ID:{os.getenv("SLURM_JOB_ID")}',
+                save_code=True,
+            )
+
+if probe_name == '': probe_name = run.name #overwrite default name if it's missing
+
+print("Training initialized with the following configuration:\n",run.config)
+
+
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir, exist_ok = True)
+
+probe_filename = os.path.join(output_dir, probe_name) + ".pth"
+
+
+# %%
 
 def state_stack_to_one_hot(state_stack):
     one_hot = torch.zeros(
@@ -127,38 +162,12 @@ def state_stack_to_one_hot(state_stack):
     
     return one_hot
 
-state_stack_one_hot = state_stack_to_one_hot(state_stack)
-print(state_stack_one_hot.shape)
-print((state_stack_one_hot[:, 0, 17, 4:9, 2:5]))
-print((state_stack[0, 17, 4:9, 2:5]))
-# %%
-config = get_args()
+# state_stack_one_hot = state_stack_to_one_hot(state_stack)
+# print(state_stack_one_hot.shape)
+# print((state_stack_one_hot[:, 0, 17, 4:9, 2:5]))
+# print((state_stack[0, 17, 4:9, 2:5]))
 
-# Add all argparse arguments to the global context (configurator)
-for arg in vars(config):
-    globals()[arg] = getattr(config, arg)
-
-# %%
-run = wandb.init(
-                project="chess_world", 
-                config=config,
-                notes = f'SLURM Job ID:{os.getenv("SLURM_JOB_ID")}'
-                save_code=True,
-            )
-
-if probe_name == '': probe_name = run.name #overwrite default name if it's missing
-
-print("Training initialized with the following configuration:\n",run.config)
-
-
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir, exist_ok = True)
-
-probe_filename = os.path.join(output_dir, probe_name) + ".pth"
-
-
-# %%
-
+#%%
 
 
 linear_probe = torch.randn(
@@ -168,7 +177,7 @@ linear_probe.requires_grad = True
 optimiser = torch.optim.AdamW([linear_probe], lr=lr, betas=(0.9, 0.99), weight_decay=wd)
 
 for epoch in range(num_epochs):
-    full_train_indices = torch.tensor(range(num_games))#torch.randperm(num_games)
+    full_train_indices = torch.randperm(num_games)
     batch = 0
     for i in tqdm(range(0, num_games, batch_size)):
         batch += 1
@@ -230,7 +239,20 @@ for epoch in range(num_epochs):
             torch.save(linear_probe, probe_filename)
         
         optimiser.zero_grad()
+        
 torch.save(linear_probe, probe_filename)
+
+logging_dict = {
+            'epoch':epoch,
+            
+            'sample':i,
+            'acc_blank':acc_blank,
+            'acc_color':acc_color,
+            'loss':loss
+            }
+            
+wandb.log(logging_dict)
+wandb.log_model(probe_filename, name = probe_name)
 run.finish()
 # %%
 # %%

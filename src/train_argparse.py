@@ -1,7 +1,9 @@
 import argparse
 
 def get_args():
-    parser = argparse.ArgumentParser(description='Argument parser for your application')
+    parser = argparse.ArgumentParser(
+        description='Chess World Probe Trainer',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     
     parser.add_argument('--output_dir', type=str, default='linear_probes/', 
                         help='Output directory')
