@@ -1,15 +1,16 @@
 #%%
-import transformer_lens.utils as utils
-from transformer_lens import HookedTransformer, HookedTransformerConfig
-from transformers import PreTrainedTokenizerFast
+import os
 import chess
 import einops
 import torch
 from tqdm import tqdm
 import numpy as np
 from fancy_einsum import einsum
+import wandb
+from transformer_lens import HookedTransformer
+from transformers import PreTrainedTokenizerFast
 from src.mech_interp.fixTL import make_official
-
+from src.train_argparse import get_args
 
 
 model_name = make_official()
@@ -98,12 +99,13 @@ rows = 8
 cols = 8
 num_epochs = 2
 num_games = 100000
-x = 0
-y = 2
 probe_name = "main_linear_probe"
-options = 3 # the two options
+output_dir = "linear_probes/"
+log_frequency = 1
+checkpoint_frequency = 1
 # The first mode is blank or not, the second mode is next or prev GIVEN that it is not blank
 modes = 3 # blank vs color (mode)
+options = 3 # the three options
 
 # NOTE: the following `alternating` is not used
 # alternating = torch.tensor([1 if i%2 == 0 else -1 for i in range(length)], device="cuda")
@@ -130,6 +132,35 @@ print(state_stack_one_hot.shape)
 print((state_stack_one_hot[:, 0, 17, 4:9, 2:5]))
 print((state_stack[0, 17, 4:9, 2:5]))
 # %%
+config = get_args()
+
+# Add all argparse arguments to the global context (configurator)
+for arg in vars(config):
+    globals()[arg] = getattr(config, arg)
+
+# %%
+run = wandb.init(
+                project="chess_world", 
+                config=config,
+                notes = f'SLURM Job ID:{os.getenv("SLURM_JOB_ID")}'
+                save_code=True,
+            )
+
+if probe_name == '': probe_name = run.name #overwrite default name if it's missing
+
+print("Training initialized with the following configuration:\n",run.config)
+
+
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir, exist_ok = True)
+
+probe_filename = os.path.join(output_dir, probe_name) + ".pth"
+
+
+# %%
+
+
+
 linear_probe = torch.randn(
     modes, model.cfg.d_model, rows, cols, options, requires_grad=False, device="cuda"
 )/np.sqrt(model.cfg.d_model)
@@ -137,13 +168,15 @@ linear_probe.requires_grad = True
 optimiser = torch.optim.AdamW([linear_probe], lr=lr, betas=(0.9, 0.99), weight_decay=wd)
 
 for epoch in range(num_epochs):
-    full_train_indices = torch.randperm(num_games)
+    full_train_indices = torch.tensor(range(num_games))#torch.randperm(num_games)
+    batch = 0
     for i in tqdm(range(0, num_games, batch_size)):
+        batch += 1
         indices = full_train_indices[i:i+batch_size]
         games_int = board_seqs_int[indices]
         games_str = board_seqs_string[indices]
         state_stack = torch.stack(
-            [torch.tensor(seq_to_state_stack(games_str[i])) for i in range(batch_size)]
+            [torch.tensor(seq_to_state_stack(games_str[j])) for j in range(min(batch_size,len(games_str)))] #use min in case batches don't evenly divide num_games
         )
         state_stack = state_stack[:, pos_start:pos_end, :, :]
 
@@ -173,11 +206,31 @@ for epoch in range(num_epochs):
         
         loss = loss_even + loss_odd + loss_all
         
-        print(f'e[{epoch}] b[{i}] acc_blank: {acc_blank:.3f} acc_color: {acc_color:.3f} loss: {loss}')
+        
         loss.backward() # it's important to do a single backward pass for mysterious PyTorch reasons, so we add up the losses - it's per mode and per square.
-
         optimiser.step()
+        
+        #logging
+        if batch % log_frequency == 0:
+            logging_dict = {
+            'epoch':epoch,
+            
+            'sample':i,
+            'acc_blank':acc_blank,
+            'acc_color':acc_color,
+            'loss':loss
+            }
+            
+            wandb.log(logging_dict)
+            print(logging_dict)
+        
+        # checkpoint
+        if batch % checkpoint_frequency == 0:
+            print(f'Saving checkpoint to "{probe_filename}"')
+            torch.save(linear_probe, probe_filename)
+        
         optimiser.zero_grad()
-torch.save(linear_probe, f"{probe_name}.pth")
+torch.save(linear_probe, probe_filename)
+run.finish()
 # %%
 # %%
