@@ -81,7 +81,7 @@ custom_board_state_fn = cu.board_to_piece_state
 config = vars(argparse_args)
 
 for arg in config:
-    globals()[arg] = getattr(config, arg)
+    globals()[arg] = config.get(arg)
 
 notes = config.notes
 config.pop('notes')
