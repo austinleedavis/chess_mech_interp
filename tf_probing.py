@@ -83,7 +83,7 @@ config = vars(argparse_args)
 for arg in config:
     globals()[arg] = config.get(arg)
 
-notes = config.notes
+notes = config.get("notes",None)
 config.pop('notes')
 
 config.update({"JobID":os.getenv("SLURM_JOB_ID")}) # do this after pushing global vars
