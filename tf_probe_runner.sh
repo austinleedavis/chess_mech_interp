@@ -6,7 +6,7 @@
 #SBATCH --constraint=h100
 #SBATCH --error=slurm/19Jan/logs/%J.err
 #SBATCH --output=slurm/19Jan/logs/%J.out
-#SBATCH --job-name=p0v1x5
+#SBATCH --job-name=p1011x10
 
 module load anaconda/anaconda3
 source /apps/anaconda/anaconda3/etc/profile.d/conda.sh
@@ -17,10 +17,15 @@ hostname
 pwd
 nvidia-smi
 
-for i in {0..1}
-do
-   python tf_probing.py --layer $i --lr 0.001 --batch_size 100 --num_epochs 5 --notes "Using mine/theirs/not states"
-done
+# for i in {10..11}
+# do
+i=10
+python tf_probing.py --layer $i --lr 0.001 --batch_size 250 --num_epochs 5 --notes "Using mine/theirs/not states"
+python tf_probing.py --layer $i --lr 0.01 --batch_size 250 --num_epochs 5 --notes "Using mine/theirs/not states"
+python tf_probing.py --layer $i --lr 0.01 --batch_size 20 --num_epochs 5 --notes "Using mine/theirs/not states"
+python tf_probing.py --layer $i --lr 0.001 --batch_size 20 --num_epochs 5 --notes "Using mine/theirs/not states"
+python tf_probing.py --layer $i --lr 0.0001 --batch_size 51 --num_epochs 5 --notes "Using mine/theirs/not states"
+# done
 
 
 #   -h, --help            show this help message and exit

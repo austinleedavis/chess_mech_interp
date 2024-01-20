@@ -24,7 +24,10 @@ model_name = make_official()
 
 tokenizer:PreTrainedTokenizerFast = PreTrainedTokenizerFast.from_pretrained(model_name)
 model = HookedTransformer.from_pretrained(model_name)
+
 cfg = model.cfg
+
+model = HookedTransformer(cfg, tokenizer)
 
 
 #%%
@@ -126,13 +129,13 @@ options = int(np.ceil(len(torch.unique(state_stack[0,0]))/2)) # number of thing 
 for arg in vars(config):
     globals()[arg] = getattr(config, arg)
 
-config.update({"JobID":os.getenv("SLURM_JOB_ID")})
-
 run = wandb.init(
                 project="chess_world", 
                 config=vars(config),
                 save_code=True,
+                
             )
+run.log({"JobID":os.getenv("SLURM_JOB_ID")})
 
 if probe_name == '': probe_name = run.name #overwrite default name if it's missing
 
