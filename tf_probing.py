@@ -93,7 +93,7 @@ run = wandb.init(
 
 if probe_name == '': probe_name = run.name #overwrite default name if it's missing
 
-config.update('probe_name': probe_name)
+config.update({'probe_name': probe_name})
 
 print("Training initialized with the following configuration:\n",run.config)
 
