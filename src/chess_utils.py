@@ -146,11 +146,12 @@ def create_state_stack(
     """Given a string of PGN format moves, create an 8x8 np.ndarray for every character in the string."""
 
     initial_states = []
-
+    move_parity = 1 # this will flip between white and black moves.
     for move in fen_stack:
-        board_state = custom_board_to_state_fn(chess.Board(move),skill)
+        board_state = custom_board_to_state_fn(chess.Board(move),skill) * move_parity
         initial_states.append(board_state)
         initial_states.append(board_state)
+        # move_parity *= -1
 
     return np.array(initial_states)
 

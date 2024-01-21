@@ -73,6 +73,7 @@ probe_name = "main_linear_probe"
 output_dir = "linear_probes/"
 log_frequency = 10
 checkpoint_frequency = 10
+resume_from = None
 custom_board_state_fn = cu.board_to_piece_state
 
 # %%
@@ -112,13 +113,14 @@ probe_filename = os.path.join(output_dir, probe_name) + ".pth"
 # Computed values
 ### ------------------
 
-min_val = int(state_stack[0,0,0].min())
-max_val = int(state_stack[0,0,0].max())
+min_val = int(state_stack.min())
+max_val = int(state_stack.max())
 options = max_val - min_val + 1
+print(f"Options: {options}")
 modes = state_stack.shape[0]
-if num_games > len(dataset):
-    print(f'INVALID NUMBER OF GAMES. Given: {num_games}. Available: {len(dataset)}. Setting num_games to {len(dataset)}')
-    num_games = min(num_games,len(dataset))
+if num_games > len(board_seqs_string):
+    print(f'INVALID NUMBER OF GAMES. Given: {num_games}. Available: {len(board_seqs_string)}. Setting num_games to {len(board_seqs_string)}')
+    num_games = min(num_games,len(board_seqs_string))
 
 state_stack_one_hot = cu.state_stack_to_one_hot(modes,rows,cols,min_val,max_val,model.cfg.device,state_stack)
 
@@ -127,13 +129,18 @@ for i in range(13): print(state_stack_one_hot[0,0,0,...,i])
 
 #%%
 
-linear_probe = torch.randn(
-    modes, model.cfg.d_model, rows, cols, options, requires_grad=False, device=model.cfg.device
-)/np.sqrt(model.cfg.d_model)
+if resume_from is not None and os.path.exists(resume_from):
+    linear_probe = torch.load(resume_from)
+else:
+    linear_probe = torch.randn(
+        modes, model.cfg.d_model, rows, cols, options, requires_grad=False, device=model.cfg.device
+    )/np.sqrt(model.cfg.d_model)
+    
 linear_probe.requires_grad = True
 optimiser = torch.optim.AdamW([linear_probe], lr=lr, betas=(0.9, 0.99), weight_decay=wd)
 batch = 0
 sample = 0
+accuracy = -99999
 for epoch in range(num_epochs):
     full_train_indices = torch.randperm(num_games)
     for i in tqdm(range(0, num_games, batch_size)):
@@ -173,18 +180,18 @@ for epoch in range(num_epochs):
         #logging
         if batch % log_frequency == 0:
             
-            accuracy = (
+            accuracy = float((
                 (probe_out[0].argmax(-1) == state_stack_one_hot[0].argmax(-1))
                 .float()
                 .mean()
-            )
+            ))
             
             logging_dict = {
                 'epoch': epoch,
                 'batch': batch,
                 'sample': sample,
                 'acc': accuracy,
-                'loss': loss
+                'loss': float(loss)
                 }
             
             wandb.log(logging_dict)
@@ -204,11 +211,11 @@ logging_dict = {
     'batch': batch,
     'sample': sample,
     'acc': accuracy,
-    'loss': loss
+    'loss': float(loss)
     }
             
 wandb.log(logging_dict)
-wandb.log_model(probe_filename, name = probe_name)
+wandb.log_model(probe_filename)#)
 run.finish()
 # %%
 # %%

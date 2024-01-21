@@ -29,6 +29,8 @@ def get_args():
                         help='Number of games')
     parser.add_argument('--resume', action='store_true', 
                         help='Flag to resume training')
+    parser.add_argument('--resume_from', type=str, default=None,
+                        help='Probe *.pth from which to resume training')
     parser.add_argument('--log_frequency', type=int, default=50,
                         help='Number of batches between logs')
     parser.add_argument('--checkpoint_frequency', type=int, default=50,
