@@ -28,9 +28,9 @@ import plotly.express as px
 import plotly.offline as pyo
 
 WANDB_LOG = True
-RELOAD_FROM_CHECKPOINT = True
-ALWAYS_SAVE_CHECKPOINT = True
-LOG_FREQ_IN_SAMPLES = 4000  # this is independent of batch size/epoch
+RELOAD_FROM_CHECKPOINT = False
+ALWAYS_SAVE_CHECKPOINT = False
+LOG_FREQ_IN_SAMPLES = 8000  # this is independent of batch size/epoch
 MAKE_PROBE_VISUALS = True
 
 @dataclass
@@ -224,8 +224,10 @@ class ProbeTrainer:
             betas=self.betas,
             weight_decay=self.wd,
         )
+        # self.optimizer = torch.optim.SGD([self.linear_probe],lr=self.max_lr, weight_decay=self.wd)
+        
         self.scheduler = torch.optim.lr_scheduler.LinearLR(
-            self.optimizer, start_factor=1.0 / 10, total_iters=len(self.df)
+            self.optimizer, start_factor=1.0 / 10, total_iters=len(self.df)/self.batch_size
         )
 
         wandb_project_name = "chess_linear_probes"
@@ -564,13 +566,21 @@ def initialize_argparser():
 
 
 def make_visuals(tensor, title, filename, range_color=None):
-    positions = tensor.shape[0]
     tensor = tensor.permute(0,3,1,2)
-    flat_tens = tensor.reshape(positions,-1,8)
-    figure = px.imshow(flat_tens.detach().cpu(), animation_frame = 0, title = title, range_color=range_color, aspect = 'auto')
-    
-    return pyo.plot(figure, filename=filename)
-
+    # positions = tensor.shape[0]
+    # flat_tens = tensor.reshape(positions,-1,8)
+    # figure = px.imshow(flat_tens.detach().cpu(), animation_frame = 0, title = title, range_color=range_color, aspect = 'auto')
+    figure = px.imshow(
+        tensor[0].detach().cpu(),
+        facet_col=0,
+        # animation_frame=0,
+        title=title,
+        range_color=range_color,
+        aspect="auto",
+    )
+    if WANDB_LOG:
+        wandb.log({f"chart_{title}":figure})
+    return pyo.plot(figure, filename=filename, auto_open=False)
 
 
 if __name__ == "__main__":
@@ -591,4 +601,3 @@ if __name__ == "__main__":
             artifact = wandb.Artifact("linear_probe", type="model")
             artifact.add_file(pt.checkpoint_filename)
             wandb.log_artifact(artifact)
-            
