@@ -17,6 +17,6 @@ pwd
 
 curl -d "Training Started" https://ntfy.sh/awesomesauceisinteresting
 
-python train_probes.py 
+python train_probes.py --target_layer 0 --epochs 30 --batch_size 32 --probe_type COLOR_0 --tags rerun,newton --reload_filename "linear_probes/saved_probes/probe_L0_B12_slice(0,-1,4)_FN_to_color/probe_L0__B12_slice(0, -1, 4)_FN_to_color.pth"
 
 curl -d "Training Complete" https://ntfy.sh/awesomesauceisinteresting
