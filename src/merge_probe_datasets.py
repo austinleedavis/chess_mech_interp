@@ -5,7 +5,7 @@ import pandas as pd
 
 def make_4th_step_feathers():
     source_folder = 'chess_data/feathers'  # Path to the folder with the original feather files
-    target_folder = 'chess_data/feathers_step4_eval'  # Path to the folder where the modified feather files will be saved
+    target_folder = 'chess_data/feathers_step4'  # Path to the folder where the modified feather files will be saved
 
     # Ensure the target folder exists
     os.makedirs(target_folder, exist_ok=True)
@@ -17,7 +17,7 @@ def make_4th_step_feathers():
             df = pd.read_feather(os.path.join(source_folder, filename))
             
             # Select every 4th row
-            filtered_df = df.iloc[2::80, :]
+            filtered_df = df.iloc[::4, :]
             
             # Save the filtered dataframe to a new feather file in the target folder
             with warnings.catch_warnings():
@@ -46,4 +46,5 @@ def merge_probe_datasets():
             
             
 if __name__ == '__main__':
-    merge_probe_datasets()
+#    merge_probe_datasets()
+    make_4th_step_feathers()

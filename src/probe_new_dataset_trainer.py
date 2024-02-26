@@ -114,9 +114,9 @@ def main():
     # Define TrainingArguments
     training_args = TrainingArguments(
         output_dir='./results',          # output directory
-        num_train_epochs=10,              # total number of training epochs
-        per_device_train_batch_size=400,  # batch size per device during training
-        per_device_eval_batch_size=400, 
+        num_train_epochs=2,              # total number of training epochs
+        per_device_train_batch_size=16,  # batch size per device during training
+        per_device_eval_batch_size=1000, 
         warmup_steps=5000,                # number of warmup steps for learning rate scheduler
         weight_decay=0.01,               # strength of weight decay
         save_total_limit=6,
@@ -127,9 +127,9 @@ def main():
         load_best_model_at_end=True,
         evaluation_strategy="steps", 
         save_strategy="steps",
-        logging_steps=100,
-        eval_steps=500,  # Number of update steps between two evaluations.
-        save_steps=500,  # must be multiple of eval steps
+        logging_steps=50,
+        eval_steps=600,  # Number of update steps between two evaluations.
+        save_steps=600,  # must be multiple of eval steps
     )
 
     # Initialize Trainer
